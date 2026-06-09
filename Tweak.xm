@@ -166,11 +166,15 @@ static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
         if (prefs.scores) node[@"isScoreHidden"] = @YES;
         
         if (prefs.automod) {
-            NSDictionary *authorInfo = node[@"authorInfo"];
-            if ([authorInfo isKindOfClass:NSDictionary.class] && [authorInfo[@"id"] isEqualToString:@"t2_6l4z3"]) {
-                node[@"isInitiallyCollapsed"] = @YES;
-            }
-        }
+		  NSDictionary *authorInfo = node[@"authorInfo"];
+		  if ([authorInfo isKindOfClass:NSDictionary.class]) {
+			id authorId = authorInfo[@"id"];
+			if ([authorId isKindOfClass:NSString.class] &&
+				[authorId isEqualToString:@"t2_6l4z3"]) {
+			  node[@"isInitiallyCollapsed"] = @YES;
+			}
+		  }
+		}
     }
     else if ([typeName isEqualToString:@"CellGroup"]) {
         // 1. Check Promoted (AdPayloads)
@@ -314,51 +318,64 @@ static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
                 filterNode(json[@"data"][@"postInfoById"], prefs);
             }
         } else if ([operationName isEqualToString:@"PdpCommentsAds"]) {
-            // Instantly clear out Comment Ads
-            if ([NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterPromoted]) {
-                if (json[@"data"] && [json[@"data"] isKindOfClass:NSDictionary.class]) {
-                    NSMutableDictionary *dataDict = json[@"data"];
-                    if (dataDict.allValues.firstObject[@"pdpCommentsAds"]) {
-                        dataDict.allValues.firstObject[@"pdpCommentsAds"] = @[];
-                    }
-                }
-            }
+		  // Instantly clear out Comment Ads
+		  if ([NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterPromoted]) {
+			if ([json[@"data"] isKindOfClass:NSDictionary.class]) {
+			  NSMutableDictionary *dataDict = json[@"data"];
+			  id container = dataDict.allValues.firstObject;
+			  if ([container isKindOfClass:NSMutableDictionary.class] &&
+				  ((NSMutableDictionary *)container)[@"pdpCommentsAds"]) {
+				((NSMutableDictionary *)container)[@"pdpCommentsAds"] = @[];
+			  }
+			}
+		  }
         } else {
-            // Original recursive logic for unknown queries (like ProfileFeedSdui)
-            if (json[@"data"] && [json[@"data"] isKindOfClass:NSDictionary.class]) {
-                NSDictionary *dataDict = json[@"data"];
-                NSMutableDictionary *root = dataDict.allValues.firstObject;
-                
-                if ([root isKindOfClass:NSDictionary.class]) {
-                  if ([root.allValues.firstObject isKindOfClass:NSDictionary.class] &&
-                      root.allValues.firstObject[@"edges"])
-                    for (NSMutableDictionary *edge in root.allValues.firstObject[@"edges"])
-                      filterNode(edge[@"node"], prefs);
-                      
-                  if (root[@"commentForest"])
-                    for (NSMutableDictionary *tree in root[@"commentForest"][@"trees"])
-                      filterNode(tree[@"node"], prefs);
-                      
-                  NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-                  BOOL filterPromoted = [defaults boolForKey:kRedditFilterPromoted];
-                  
-                  if (root[@"commentsPageAds"] && filterPromoted)
-                    root[@"commentsPageAds"] = @[];
-                    
-                  if (root[@"commentTreeAds"] && filterPromoted)
-                    root[@"commentTreeAds"] = @[];
-                    
-                  if (root[@"pdpCommentsAds"] && filterPromoted) // Kept just in case the fast path misses
-                    root[@"pdpCommentsAds"] = @[];
-                    
-                  if (root[@"recommendations"] && [defaults boolForKey:kRedditFilterRecommended])
-                    root[@"recommendations"] = @[];
-                    
-                } else if ([root isKindOfClass:NSArray.class]) {
-                  for (NSMutableDictionary *node in (NSArray *)root) filterNode(node, prefs);
-                }
-            }
-        }
+		  // Original recursive logic for unknown queries (like ProfileFeedSdui)
+		  if ([json[@"data"] isKindOfClass:NSDictionary.class]) {
+			NSDictionary *dataDict = json[@"data"];
+			id root = dataDict.allValues.firstObject;
+
+			if ([root isKindOfClass:NSDictionary.class]) {
+			  NSMutableDictionary *rootDict = (NSMutableDictionary *)root;
+
+			  // Read the first child once instead of re-evaluating allValues repeatedly
+			  id firstChild = rootDict.allValues.firstObject;
+			  if ([firstChild isKindOfClass:NSDictionary.class]) {
+				id edges = ((NSDictionary *)firstChild)[@"edges"];
+				if ([edges isKindOfClass:NSArray.class]) {
+				  for (NSMutableDictionary *edge in (NSArray *)edges)
+					if ([edge isKindOfClass:NSDictionary.class])
+					  filterNode(edge[@"node"], prefs);
+				}
+			  }
+
+			  id commentForest = rootDict[@"commentForest"];
+			  if ([commentForest isKindOfClass:NSDictionary.class]) {
+				id trees = ((NSDictionary *)commentForest)[@"trees"];
+				if ([trees isKindOfClass:NSArray.class]) {
+				  for (NSMutableDictionary *tree in (NSArray *)trees)
+					if ([tree isKindOfClass:NSDictionary.class])
+					  filterNode(tree[@"node"], prefs);
+				}
+			  }
+
+			  NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+			  BOOL filterPromoted = [defaults boolForKey:kRedditFilterPromoted];
+
+			  if (filterPromoted && rootDict[@"commentsPageAds"])
+				rootDict[@"commentsPageAds"] = @[];
+			  if (filterPromoted && rootDict[@"commentTreeAds"])
+				rootDict[@"commentTreeAds"] = @[];
+			  if (filterPromoted && rootDict[@"pdpCommentsAds"]) // Kept just in case the fast path misses
+				rootDict[@"pdpCommentsAds"] = @[];
+			  if (rootDict[@"recommendations"] && [defaults boolForKey:kRedditFilterRecommended])
+				rootDict[@"recommendations"] = @[];
+			} else if ([root isKindOfClass:NSArray.class]) {
+			  for (NSMutableDictionary *node in (NSArray *)root)
+				filterNode(node, prefs);
+			}
+		  }
+		}
         
         NSData *modifiedData = [NSJSONSerialization dataWithJSONObject:json options:0 error:nil];
         completionHandler(modifiedData ?: data, response, error);
