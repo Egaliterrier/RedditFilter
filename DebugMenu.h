@@ -18,6 +18,8 @@
 // to 0 via the build) for a release build and the tracker, the recording call
 // sites, and the debug menu all compile away to nothing.
 
+#import <Foundation/Foundation.h> // Move this to the top!
+
 #ifndef REDDITFILTER_DEBUG
 // 1 on the test branch. Flip to 0 (or pass -DREDDITFILTER_DEBUG=0) for release.
 #define REDDITFILTER_DEBUG 1
@@ -36,8 +38,6 @@ typedef NS_ENUM(NSInteger, RFSchemaSig) {
 };
 
 #if REDDITFILTER_DEBUG
-
-#import <Foundation/Foundation.h>
 
 // Keys used in the dictionaries returned by -snapshot.
 extern NSString *const kRFDebugOp;            // NSString  operation name
