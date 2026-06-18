@@ -1,19 +1,40 @@
 #import "FeedFilterSettingsViewController.h"
+#import "DebugMenu.h"
 
 extern NSBundle *redditFilterBundle;
 extern UIImage *iconWithName(NSString *iconName);
 extern Class CoreClass(NSString *name);
 #define LOC(x, d) [redditFilterBundle localizedStringForKey:x value:d table:nil]
 
+#if REDDITFILTER_DEBUG
+// Visible declarations for the debug-only helpers so the direct call site in
+// -cellForRowAtIndexPath: and the @selector(...) references are fully typed.
+// (The implementations are added to the class at runtime by Logos below.)
+@interface FeedFilterSettingsViewController (RFSchemaDebug)
+- (UITableViewCell *)debugCellForRow:(NSInteger)row inTableView:(UITableView *)tableView;
+- (void)rfCopyDiscoveredPath:(UIButton *)sender;
+- (void)rfResetCounters:(UIButton *)sender;
+@end
+#endif
+
 %subclass FeedFilterSettingsViewController : BaseTableViewController
 %new
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+#if REDDITFILTER_DEBUG
+  return 2;
+#else
   return 1;
+#endif
 }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
   switch (section) {
     case 0:
       return 6;
+#if REDDITFILTER_DEBUG
+    case 1:
+      // One row per tracked schema path, plus a trailing "reset" row.
+      return [[RFSchemaDebug shared] snapshot].count + 1;
+#endif
     default:
       return 0;
   }
@@ -97,6 +118,10 @@ extern Class CoreClass(NSString *name);
       cell = toggleCell;
       break;
     }
+#if REDDITFILTER_DEBUG
+    case 1:
+      return [self debugCellForRow:indexPath.row inTableView:tableView];
+#endif
     default:
       return nil;
   }
@@ -140,6 +165,11 @@ extern Class CoreClass(NSString *name);
     case 0:
       label.text = [LOC(@"filter.settings.header", @"Filters") uppercaseString];
       break;
+#if REDDITFILTER_DEBUG
+    case 1:
+      label.text = [@"Schema Paths · Debug" uppercaseString];
+      break;
+#endif
     default:
       return nil;
   }
@@ -151,14 +181,16 @@ extern Class CoreClass(NSString *name);
 }
 %new
 - (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
+  CGFloat footerHeight = [self tableView:tableView heightForFooterInSection:section];
   BaseLabel *label = [%c(BaseLabel) labelWithSubheaderFont];
   LayoutGuidance *layoutGuidance = [%c(LayoutGuidance) currentGuidance];
   label.frame = CGRectMake(layoutGuidance.gridPadding, 0,
-                           layoutGuidance.maxContentWidth - layoutGuidance.gridPaddingDouble, 40.0);
+                           layoutGuidance.maxContentWidth - layoutGuidance.gridPaddingDouble,
+                           footerHeight);
   [label associatePropertySetter:@selector(setTextColor:)
          withThemePropertyGetter:@selector(metaTextColor)];
   BaseTableReusableView *footerView = [[%c(BaseTableReusableView) alloc]
-      initWithFrame:CGRectMake(0, 0, tableView.frameWidth, 40.0)];
+      initWithFrame:CGRectMake(0, 0, tableView.frameWidth, footerHeight)];
   [footerView.contentView addSubview:label];
   [footerView associatePropertySetter:@selector(setBackgroundColor:)
               withThemePropertyGetter:@selector(canvasColor)];
@@ -166,6 +198,13 @@ extern Class CoreClass(NSString *name);
     case 0:
       label.text = LOC(@"filter.settings.footer", @"Filter specific types of posts from your feed");
       break;
+#if REDDITFILTER_DEBUG
+    case 1:
+      label.numberOfLines = 0;
+      label.text = @"✓ resolved · ✗ broke (structural fallback is now filtering). "
+                   @"Tap Copy on a ✗ row to grab the auto-discovered replacement path.";
+      break;
+#endif
     default:
       return nil;
   }
@@ -173,6 +212,9 @@ extern Class CoreClass(NSString *name);
 }
 %new
 - (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
+#if REDDITFILTER_DEBUG
+  if (section == 1) return 76.0;
+#endif
   return 40.0;
 }
 - (void)viewDidLoad {
@@ -187,6 +229,11 @@ extern Class CoreClass(NSString *name);
          forCellReuseIdentifier:kToggleCellID];
   [self.tableView registerClass:labelCellClass
          forCellReuseIdentifier:kLabelCellID];
+#if REDDITFILTER_DEBUG
+  // Debug rows carry multi-line detail text, so let them self-size.
+  self.tableView.estimatedRowHeight = 60.0;
+  self.tableView.rowHeight = UITableViewAutomaticDimension;
+#endif
 }
 %new
 - (void)didTogglePromotedSwitch:(UISwitch *)sender {
@@ -211,5 +258,135 @@ extern Class CoreClass(NSString *name);
 %new
 - (void)didToggleAutoCollapseAutoModSwitch:(UISwitch *)sender {
   [NSUserDefaults.standardUserDefaults setBool:sender.on forKey:kRedditFilterAutoCollapseAutoMod];
+}
+
+// ---------------------------------------------------------------------------
+// Schema-path debug section.
+//
+// All of the method *declarations* below are compiled unconditionally so that
+// Logos always registers them on the subclass; only their bodies are gated on
+// REDDITFILTER_DEBUG. In a release build the bodies collapse to no-ops, the
+// section is never shown (numberOfSections returns 1), and these methods are
+// never invoked.
+// ---------------------------------------------------------------------------
+%new
+- (UITableViewCell *)debugCellForRow:(NSInteger)row inTableView:(UITableView *)tableView {
+#if REDDITFILTER_DEBUG
+  static NSString *const kRFDebugCellID = @"RFSchemaDebugCell";
+  // Deliberately a plain UIKit cell, not a Reddit class: the whole point of
+  // this screen is to keep working when Reddit's own classes/schema change.
+  UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:kRFDebugCellID];
+  if (!cell) {
+    cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                  reuseIdentifier:kRFDebugCellID];
+    cell.detailTextLabel.numberOfLines = 0;
+    cell.detailTextLabel.font = [UIFont monospacedSystemFontOfSize:11.0
+                                                            weight:UIFontWeightRegular];
+    cell.textLabel.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightSemibold];
+  }
+  cell.accessoryView = nil;
+  cell.selectionStyle = UITableViewCellSelectionStyleNone;
+
+  NSArray<NSDictionary *> *snapshot = [[RFSchemaDebug shared] snapshot];
+
+  // Trailing "reset" row.
+  if (row >= (NSInteger)snapshot.count) {
+    cell.textLabel.textColor = [UIColor systemBlueColor];
+    cell.textLabel.text = @"Reset counters";
+    cell.detailTextLabel.textColor = [UIColor secondaryLabelColor];
+    cell.detailTextLabel.text = @"Clear all stats and re-arm path discovery";
+    UIButton *resetButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [resetButton setTitle:@"Reset" forState:UIControlStateNormal];
+    resetButton.titleLabel.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightSemibold];
+    [resetButton addTarget:self
+                    action:@selector(rfResetCounters:)
+          forControlEvents:UIControlEventTouchUpInside];
+    [resetButton sizeToFit];
+    cell.accessoryView = resetButton;
+    return cell;
+  }
+
+  NSDictionary *record = snapshot[row];
+  NSString *op = record[kRFDebugOp];
+  NSString *expected = record[kRFDebugExpected];
+  NSString *discovered = record[kRFDebugDiscovered];
+  NSInteger hits = [record[kRFDebugHits] integerValue];
+  NSInteger misses = [record[kRFDebugMisses] integerValue];
+  BOOL seen = [record[kRFDebugSeen] boolValue];
+  BOOL lastResolved = [record[kRFDebugLastResolved] boolValue];
+
+  cell.textLabel.textColor = [UIColor labelColor];
+  cell.textLabel.text = op;
+
+  NSString *detail;
+  UIColor *detailColor;
+  if (!seen) {
+    detail = [NSString stringWithFormat:@"untested\nexpected: %@", expected];
+    detailColor = [UIColor secondaryLabelColor];
+  } else if (lastResolved) {
+    detail = [NSString stringWithFormat:@"\u2713 OK \u00b7 %ld hit%@",
+                                        (long)hits, hits == 1 ? @"" : @"s"];
+    if (misses > 0)
+      detail = [detail stringByAppendingFormat:@"  (recovered after %ld miss%@)",
+                                               (long)misses, misses == 1 ? @"" : @"es"];
+    detailColor = [UIColor systemGreenColor];
+  } else {
+    detail = [NSString stringWithFormat:@"\u2717 MISS \u00b7 %ld miss%@ \u00b7 fallback active",
+                                        (long)misses, misses == 1 ? @"" : @"es"];
+    if (discovered.length) {
+      detail = [detail stringByAppendingFormat:@"\n\u2192 %@", discovered];
+      UIButton *copyButton = [UIButton buttonWithType:UIButtonTypeSystem];
+      [copyButton setTitle:@"Copy" forState:UIControlStateNormal];
+      copyButton.titleLabel.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightSemibold];
+      copyButton.tag = row;
+      [copyButton addTarget:self
+                     action:@selector(rfCopyDiscoveredPath:)
+           forControlEvents:UIControlEventTouchUpInside];
+      [copyButton sizeToFit];
+      cell.accessoryView = copyButton;
+    } else {
+      detail = [detail stringByAppendingFormat:@"\ncould not auto-locate a new path\nexpected: %@",
+                                               expected];
+    }
+    detailColor = [UIColor systemRedColor];
+  }
+  cell.detailTextLabel.text = detail;
+  cell.detailTextLabel.textColor = detailColor;
+  return cell;
+#else
+  return nil;
+#endif
+}
+%new
+- (void)rfCopyDiscoveredPath:(UIButton *)sender {
+#if REDDITFILTER_DEBUG
+  NSArray<NSDictionary *> *snapshot = [[RFSchemaDebug shared] snapshot];
+  if (sender.tag < 0 || sender.tag >= (NSInteger)snapshot.count) return;
+  NSString *discovered = snapshot[sender.tag][kRFDebugDiscovered];
+  if (!discovered.length) return;
+  UIPasteboard.generalPasteboard.string = discovered;
+  [sender setTitle:@"Copied" forState:UIControlStateNormal];
+  [sender sizeToFit];
+  __weak UIButton *weakSender = sender;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
+                 dispatch_get_main_queue(), ^{
+                   [weakSender setTitle:@"Copy" forState:UIControlStateNormal];
+                   [weakSender sizeToFit];
+                 });
+#endif
+}
+%new
+- (void)rfResetCounters:(UIButton *)sender {
+#if REDDITFILTER_DEBUG
+  [[RFSchemaDebug shared] reset];
+  [self.tableView reloadData];
+#endif
+}
+- (void)viewWillAppear:(BOOL)animated {
+  %orig;
+#if REDDITFILTER_DEBUG
+  // Stats accrue while the app runs; refresh them each time the screen opens.
+  [self.tableView reloadData];
+#endif
 }
 %end
