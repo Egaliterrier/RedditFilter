@@ -1,10 +1,10 @@
 #import "FeedFilterSettingsViewController.h"
 #import "DebugMenu.h"
 
-extern NSBundle *redditFilterBundle;
+extern "C" NSString *localizedString(NSString *key, NSString *table);
 extern UIImage *iconWithName(NSString *iconName);
 extern Class CoreClass(NSString *name);
-#define LOC(x, d) [redditFilterBundle localizedStringForKey:x value:d table:nil]
+#define LOC(x, d) (localizedString(x, nil) ?: d)
 
 #if REDDITFILTER_DEBUG
 // Visible declarations for the debug-only helpers so the direct call site in

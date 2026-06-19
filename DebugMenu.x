@@ -81,21 +81,29 @@ static const NSUInteger kRFMaxArrayProbe = 6; // array elements descended into
               signature:(RFSchemaSig)signature {
   if (operation.length == 0) return;
 
-  // Discovery (recursive walk) is done outside the queue to avoid holding the
-  // lock during the only potentially heavy work. We only run it on the first
-  // unresolved sighting of an operation.
   __block BOOL needsDiscovery = NO;
   dispatch_sync(_queue, ^{
     NSMutableDictionary *record = _records[operation];
-    // Check if we need to run discovery
-    if (record && !record[kRFDebugDiscovered]) {
-      needsDiscovery = YES;
+    if (record) {
+        // 1. Update the stats so it no longer says "untested"
+        record[kRFDebugSeen] = @YES;
+        record[kRFDebugLastResolved] = @(resolved);
+        
+        if (resolved) {
+            record[kRFDebugHits] = @([record[kRFDebugHits] integerValue] + 1);
+        } else {
+            record[kRFDebugMisses] = @([record[kRFDebugMisses] integerValue] + 1);
+            // If it missed and we haven't discovered a new path yet, arm discovery
+            if (!record[kRFDebugDiscovered]) {
+                needsDiscovery = YES;
+            }
+        }
     }
   });
 
   if (!needsDiscovery) return;
 
-  // Run the actual discovery process
+  // 2. Run the actual discovery process outside the lock
   NSString *discovered = [[self class] discoverPathForSignature:signature in:json];
   
   dispatch_sync(_queue, ^{
@@ -103,10 +111,9 @@ static const NSUInteger kRFMaxArrayProbe = 6; // array elements descended into
     // Re-check: another thread may have filled it in the meantime.
     if (record && !record[kRFDebugDiscovered]) {
       if (discovered.length) {
-        // If we found a new path, save it
         record[kRFDebugDiscovered] = discovered;
       } else {
-        // If discovery failed, capture the raw JSON so you can inspect it
+        // 3. If discovery failed, capture the raw JSON so you can inspect it
         NSData *jsonData = [NSJSONSerialization dataWithJSONObject:json options:NSJSONWritingPrettyPrinted error:nil];
         if (jsonData) {
             record[kRFDebugFailedJSON] = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
