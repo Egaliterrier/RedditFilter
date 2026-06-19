@@ -377,17 +377,22 @@ static void filterGenericResponse(NSMutableDictionary *json, RedditFilterPrefs p
                 filterGenericResponse(json, prefs);
             }
         } else if ([operationName isEqualToString:@"PostInfoByIdComments"] || [operationName isEqualToString:@"PostInfoById"]) {
-            id trees = [json valueForKeyPath:@"data.postInfoById.commentForest.trees"];
-            BOOL resolved = [trees isKindOfClass:NSArray.class];
+            NSMutableDictionary *postInfo = [json valueForKeyPath:@"data.postInfoById"];
+            id trees = [postInfo valueForKeyPath:@"commentForest.trees"];
+            // It's a "hit" if we found the trees array, OR if the post loaded perfectly but simply has 0 comments (commentForest is entirely omitted).
+            BOOL resolved = [trees isKindOfClass:NSArray.class] || 
+                            ([postInfo isKindOfClass:NSDictionary.class] && postInfo[@"commentForest"] == nil);             
             RF_RECORD_SCHEMA(@"PostInfoById", @"data.postInfoById.commentForest.trees", resolved, json, RFSchemaSigTrees);
             if (resolved) {
-                for (NSMutableDictionary *tree in (NSArray *)trees)
-                    filterNode(tree[@"node"], prefs);
+                if ([trees isKindOfClass:NSArray.class]) {
+                    for (NSMutableDictionary *tree in (NSArray *)trees)
+                        filterNode(tree[@"node"], prefs);
+                }
             } else {
                 filterGenericResponse(json, prefs);
             }
-            if ([json valueForKeyPath:@"data.postInfoById"]) {
-                filterNode(json[@"data"][@"postInfoById"], prefs);
+            if ([postInfo isKindOfClass:NSDictionary.class]) {
+                filterNode(postInfo, prefs);
             }
         } else if ([operationName isEqualToString:@"PdpCommentsAds"]) {
             // Locate the comment-ads container, then clear it if Promoted filtering is on.
