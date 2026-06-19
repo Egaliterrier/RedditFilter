@@ -87,9 +87,23 @@ static const NSUInteger kRFMaxArrayProbe = 6; // array elements descended into
   __block BOOL needsDiscovery = NO;
   dispatch_sync(_queue, ^{
     NSMutableDictionary *record = _records[operation];
+    // Check if we need to run discovery
+    if (record && !record[kRFDebugDiscovered]) {
+      needsDiscovery = YES;
+    }
+  });
+
+  if (!needsDiscovery) return;
+
+  // Run the actual discovery process
+  NSString *discovered = [[self class] discoverPathForSignature:signature in:json];
+  
+  dispatch_sync(_queue, ^{
+    NSMutableDictionary *record = _records[operation];
     // Re-check: another thread may have filled it in the meantime.
     if (record && !record[kRFDebugDiscovered]) {
       if (discovered.length) {
+        // If we found a new path, save it
         record[kRFDebugDiscovered] = discovered;
       } else {
         // If discovery failed, capture the raw JSON so you can inspect it
@@ -98,18 +112,6 @@ static const NSUInteger kRFMaxArrayProbe = 6; // array elements descended into
             record[kRFDebugFailedJSON] = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
         }
       }
-    }
-  });
-
-  if (!needsDiscovery) return;
-
-  NSString *discovered = [[self class] discoverPathForSignature:signature in:json];
-
-  dispatch_sync(_queue, ^{
-    NSMutableDictionary *record = _records[operation];
-    // Re-check: another thread may have filled it in the meantime.
-    if (record && !record[kRFDebugDiscovered] && discovered.length) {
-      record[kRFDebugDiscovered] = discovered;
     }
   });
 }
