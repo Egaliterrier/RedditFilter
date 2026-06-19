@@ -7,6 +7,7 @@
 #import <mach-o/dyld.h>
 #import <objc/runtime.h>
 #import "Preferences.h"
+#import "DebugMenu.h"
 
 // --- Cache Setup ---
 static NSCache *imageCache;
@@ -166,11 +167,15 @@ static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
         if (prefs.scores) node[@"isScoreHidden"] = @YES;
         
         if (prefs.automod) {
-            NSDictionary *authorInfo = node[@"authorInfo"];
-            if ([authorInfo isKindOfClass:NSDictionary.class] && [authorInfo[@"id"] isEqualToString:@"t2_6l4z3"]) {
-                node[@"isInitiallyCollapsed"] = @YES;
-            }
-        }
+		  NSDictionary *authorInfo = node[@"authorInfo"];
+		  if ([authorInfo isKindOfClass:NSDictionary.class]) {
+			id authorId = authorInfo[@"id"];
+			if ([authorId isKindOfClass:NSString.class] &&
+				[authorId isEqualToString:@"t2_6l4z3"]) {
+			  node[@"isInitiallyCollapsed"] = @YES;
+			}
+		  }
+		}
     }
     else if ([typeName isEqualToString:@"CellGroup"]) {
         // 1. Check Promoted (AdPayloads)
@@ -223,6 +228,58 @@ static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
     else if ([typeName isEqualToString:@"AdPost"]) {
         if (prefs.promoted) node[@"isHidden"] = @YES;
     }
+}
+
+// Generic, schema-agnostic filtering. Used for unknown operations and, now,
+// as the fallback whenever a known operation's hardcoded fast path fails to
+// resolve (e.g. after Reddit renames part of its GraphQL schema). Because it
+// walks the response structurally instead of by a fixed key path, it keeps
+// working across the common "an ancestor key got renamed" breakage.
+static void filterGenericResponse(NSMutableDictionary *json, RedditFilterPrefs prefs) {
+  if (![json[@"data"] isKindOfClass:NSDictionary.class]) return;
+
+  NSDictionary *dataDict = json[@"data"];
+  id root = dataDict.allValues.firstObject;
+
+  if ([root isKindOfClass:NSDictionary.class]) {
+    NSMutableDictionary *rootDict = (NSMutableDictionary *)root;
+
+    // Read the first child once instead of re-evaluating allValues repeatedly
+    id firstChild = rootDict.allValues.firstObject;
+    if ([firstChild isKindOfClass:NSDictionary.class]) {
+      id edges = ((NSDictionary *)firstChild)[@"edges"];
+      if ([edges isKindOfClass:NSArray.class]) {
+        for (NSMutableDictionary *edge in (NSArray *)edges)
+          if ([edge isKindOfClass:NSDictionary.class])
+            filterNode(edge[@"node"], prefs);
+      }
+    }
+
+    id commentForest = rootDict[@"commentForest"];
+    if ([commentForest isKindOfClass:NSDictionary.class]) {
+      id trees = ((NSDictionary *)commentForest)[@"trees"];
+      if ([trees isKindOfClass:NSArray.class]) {
+        for (NSMutableDictionary *tree in (NSArray *)trees)
+          if ([tree isKindOfClass:NSDictionary.class])
+            filterNode(tree[@"node"], prefs);
+      }
+    }
+
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    BOOL filterPromoted = [defaults boolForKey:kRedditFilterPromoted];
+
+    if (filterPromoted && rootDict[@"commentsPageAds"])
+      rootDict[@"commentsPageAds"] = @[];
+    if (filterPromoted && rootDict[@"commentTreeAds"])
+      rootDict[@"commentTreeAds"] = @[];
+    if (filterPromoted && rootDict[@"pdpCommentsAds"]) // Kept just in case the fast path misses
+      rootDict[@"pdpCommentsAds"] = @[];
+    if (rootDict[@"recommendations"] && [defaults boolForKey:kRedditFilterRecommended])
+      rootDict[@"recommendations"] = @[];
+  } else if ([root isKindOfClass:NSArray.class]) {
+    for (NSMutableDictionary *node in (NSArray *)root)
+      filterNode(node, prefs);
+  }
 }
 
 %hook NSURLSession
@@ -285,81 +342,83 @@ static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
             return completionHandler(data, response, error);
         }
 
-        // Fast Path based on known schemas
+        // Fast path based on known schemas. Each branch tries its hardcoded
+        // schema path; on a miss it records the failure (debug builds also try
+        // to auto-discover where the data moved) and falls back to the generic
+        // structural filter so content keeps being filtered.
         if ([operationName isEqualToString:@"HomeFeedSdui"]) {
-            if ([json valueForKeyPath:@"data.homeV3.elements.edges"]) {
-                for (NSMutableDictionary *edge in json[@"data"][@"homeV3"][@"elements"][@"edges"]) {
+            id edges = [json valueForKeyPath:@"data.homeV3.elements.edges"];
+            BOOL resolved = [edges isKindOfClass:NSArray.class];
+            RF_RECORD_SCHEMA(@"HomeFeedSdui", @"data.homeV3.elements.edges", resolved, json, RFSchemaSigEdges);
+            if (resolved) {
+                for (NSMutableDictionary *edge in (NSArray *)edges)
                     filterNode(edge[@"node"], prefs);
-                }
+            } else {
+                filterGenericResponse(json, prefs);
             }
         } else if ([operationName isEqualToString:@"PopularFeedSdui"]) {
-            if ([json valueForKeyPath:@"data.popularV3.elements.edges"]) {
-                for (NSMutableDictionary *edge in json[@"data"][@"popularV3"][@"elements"][@"edges"]) {
+            id edges = [json valueForKeyPath:@"data.popularV3.elements.edges"];
+            BOOL resolved = [edges isKindOfClass:NSArray.class];
+            RF_RECORD_SCHEMA(@"PopularFeedSdui", @"data.popularV3.elements.edges", resolved, json, RFSchemaSigEdges);
+            if (resolved) {
+                for (NSMutableDictionary *edge in (NSArray *)edges)
                     filterNode(edge[@"node"], prefs);
-                }
+            } else {
+                filterGenericResponse(json, prefs);
             }
         } else if ([operationName isEqualToString:@"FeedPostDetailsByIds"]) {
-            if ([json valueForKeyPath:@"data.postsInfoByIds"]) {
-                for (NSMutableDictionary *node in json[@"data"][@"postsInfoByIds"]) {
+            id nodes = [json valueForKeyPath:@"data.postsInfoByIds"];
+            BOOL resolved = [nodes isKindOfClass:NSArray.class];
+            RF_RECORD_SCHEMA(@"FeedPostDetailsByIds", @"data.postsInfoByIds", resolved, json, RFSchemaSigNodeArray);
+            if (resolved) {
+                for (NSMutableDictionary *node in (NSArray *)nodes)
                     filterNode(node, prefs);
-                }
+            } else {
+                filterGenericResponse(json, prefs);
             }
         } else if ([operationName isEqualToString:@"PostInfoByIdComments"] || [operationName isEqualToString:@"PostInfoById"]) {
-            if ([json valueForKeyPath:@"data.postInfoById.commentForest.trees"]) {
-                for (NSMutableDictionary *tree in json[@"data"][@"postInfoById"][@"commentForest"][@"trees"]) {
-                    filterNode(tree[@"node"], prefs);
+            NSMutableDictionary *postInfo = [json valueForKeyPath:@"data.postInfoById"];
+            id trees = [postInfo valueForKeyPath:@"commentForest.trees"];
+            // It's a "hit" if we found the trees array, OR if the post loaded perfectly but simply has 0 comments (commentForest is entirely omitted).
+            BOOL resolved = [trees isKindOfClass:NSArray.class] || 
+                            ([postInfo isKindOfClass:NSDictionary.class] && postInfo[@"commentForest"] == nil);             
+            RF_RECORD_SCHEMA(@"PostInfoById", @"data.postInfoById.commentForest.trees", resolved, json, RFSchemaSigTrees);
+            if (resolved) {
+                if ([trees isKindOfClass:NSArray.class]) {
+                    for (NSMutableDictionary *tree in (NSArray *)trees)
+                        filterNode(tree[@"node"], prefs);
                 }
+            } else {
+                filterGenericResponse(json, prefs);
             }
-            if ([json valueForKeyPath:@"data.postInfoById"]) {
-                filterNode(json[@"data"][@"postInfoById"], prefs);
+            if ([postInfo isKindOfClass:NSDictionary.class]) {
+                filterNode(postInfo, prefs);
             }
         } else if ([operationName isEqualToString:@"PdpCommentsAds"]) {
-            // Instantly clear out Comment Ads
+            // Locate the comment-ads container, then clear it if Promoted filtering is on.
+            NSMutableDictionary *adContainer = nil;
+            if ([json[@"data"] isKindOfClass:NSDictionary.class]) {
+                NSMutableDictionary *dataDict = json[@"data"];
+                id container = dataDict.allValues.firstObject;
+                if ([container isKindOfClass:NSMutableDictionary.class] &&
+                    ((NSMutableDictionary *)container)[@"pdpCommentsAds"]) {
+                    adContainer = (NSMutableDictionary *)container;
+                }
+            }
+            BOOL resolved = (adContainer != nil);
+            RF_RECORD_SCHEMA(@"PdpCommentsAds", @"data.*.pdpCommentsAds", resolved, json, RFSchemaSigCommentsAds);
             if ([NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterPromoted]) {
-                if (json[@"data"] && [json[@"data"] isKindOfClass:NSDictionary.class]) {
-                    NSMutableDictionary *dataDict = json[@"data"];
-                    if (dataDict.allValues.firstObject[@"pdpCommentsAds"]) {
-                        dataDict.allValues.firstObject[@"pdpCommentsAds"] = @[];
-                    }
+                if (resolved) {
+                    adContainer[@"pdpCommentsAds"] = @[];
+                } else {
+                    filterGenericResponse(json, prefs);
                 }
             }
         } else {
-            // Original recursive logic for unknown queries (like ProfileFeedSdui)
-            if (json[@"data"] && [json[@"data"] isKindOfClass:NSDictionary.class]) {
-                NSDictionary *dataDict = json[@"data"];
-                NSMutableDictionary *root = dataDict.allValues.firstObject;
-                
-                if ([root isKindOfClass:NSDictionary.class]) {
-                  if ([root.allValues.firstObject isKindOfClass:NSDictionary.class] &&
-                      root.allValues.firstObject[@"edges"])
-                    for (NSMutableDictionary *edge in root.allValues.firstObject[@"edges"])
-                      filterNode(edge[@"node"], prefs);
-                      
-                  if (root[@"commentForest"])
-                    for (NSMutableDictionary *tree in root[@"commentForest"][@"trees"])
-                      filterNode(tree[@"node"], prefs);
-                      
-                  NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-                  BOOL filterPromoted = [defaults boolForKey:kRedditFilterPromoted];
-                  
-                  if (root[@"commentsPageAds"] && filterPromoted)
-                    root[@"commentsPageAds"] = @[];
-                    
-                  if (root[@"commentTreeAds"] && filterPromoted)
-                    root[@"commentTreeAds"] = @[];
-                    
-                  if (root[@"pdpCommentsAds"] && filterPromoted) // Kept just in case the fast path misses
-                    root[@"pdpCommentsAds"] = @[];
-                    
-                  if (root[@"recommendations"] && [defaults boolForKey:kRedditFilterRecommended])
-                    root[@"recommendations"] = @[];
-                    
-                } else if ([root isKindOfClass:NSArray.class]) {
-                  for (NSMutableDictionary *node in (NSArray *)root) filterNode(node, prefs);
-                }
-            }
+            // Unknown operation (e.g. ProfileFeedSdui): use the generic filter.
+            filterGenericResponse(json, prefs);
         }
-        
+
         NSData *modifiedData = [NSJSONSerialization dataWithJSONObject:json options:0 error:nil];
         completionHandler(modifiedData ?: data, response, error);
       };

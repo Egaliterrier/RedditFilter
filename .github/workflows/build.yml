@@ -78,6 +78,17 @@ jobs:
           cache-dir-theos: ${{ github.workspace }}/theos
           cache-dir-sdks: ${{ github.workspace }}/theos/sdks
 
+      - name: Set Debug Variables
+        id: debug_vars
+        run: |
+          if [ "${{ github.ref_name }}" == "main" ]; then
+            echo "Building on main: Debug Menu OFF"
+            echo "cflags=-DREDDITFILTER_DEBUG=0" >> $GITHUB_OUTPUT
+          else
+            echo "Building on ${{ github.ref_name }}: Debug Menu ON"
+            echo "cflags=-DREDDITFILTER_DEBUG=1" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout theos-jailed
         if: ${{ inputs.create_release }}
         uses: actions/checkout@v4
@@ -96,11 +107,13 @@ jobs:
         env:
           FINALPACKAGE: ${{ inputs.create_release }}
           THEOS_PACKAGE_SCHEME: rootless
+          ADDITIONAL_CFLAGS: ${{ steps.debug_vars.outputs.cflags }}
 
       - name: Build rootful deb
         run: make clean package
         env:
           FINALPACKAGE: ${{ inputs.create_release }}
+          ADDITIONAL_CFLAGS: ${{ steps.debug_vars.outputs.cflags }}
 
       - name: Build IPA
         if: ${{ inputs.create_release }}
@@ -110,6 +123,17 @@ jobs:
           SIDELOADED: 1
           IPA: ${{ github.workspace }}/App.ipa
           APP_VERSION: ${{ steps.ipa_info.outputs.version }}
+          ADDITIONAL_CFLAGS: ${{ steps.debug_vars.outputs.cflags }}
+
+      - name: Append Debug Suffix to IPA
+        if: ${{ inputs.create_release && github.ref_name != 'main' }}
+        run: |
+          for file in packages/*.ipa; do
+            if [ -f "$file" ]; then
+              mv "$file" "${file%.ipa}_debug.ipa"
+              echo "Renamed to ${file%.ipa}_debug.ipa"
+            fi
+          done
 
       - name: Hash release files
         id: hash_files
