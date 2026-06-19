@@ -7,7 +7,6 @@
 #import <mach-o/dyld.h>
 #import <objc/runtime.h>
 #import "Preferences.h"
-#import "DebugMenu.h"
 
 // --- Cache Setup ---
 static NSCache *imageCache;
@@ -24,7 +23,7 @@ typedef struct {
 } RedditFilterPrefs;
 
 @interface CUICatalog : NSObject {
-  NSBundle *_bundle;
+    NSBundle *_bundle;
 }
 - (NSArray<NSString *> *)allImageNames;
 - (instancetype)initWithName:(NSString *)name fromBundle:(NSBundle *)bundle;
@@ -36,27 +35,21 @@ static NSMutableArray<CUICatalog *> *assetCatalogs;
 
 extern "C" UIImage *iconWithName(NSString *iconName) {
     if (!iconName) return nil;
-    
     // Check Cache First
     UIImage *cachedImage = [imageCache objectForKey:iconName];
     if (cachedImage) return cachedImage;
-
     for (CUICatalog *catalog in assetCatalogs) {
         for (NSString *imageName in [catalog allImageNames]) {
             if ([imageName hasPrefix:iconName] &&
                 (imageName.length == iconName.length || imageName.length == iconName.length + 3)) {
-                
                 // SAFELY retrieve the private _bundle ivar
                 Ivar bundleIvar = class_getInstanceVariable(object_getClass(catalog), "_bundle");
                 if (!bundleIvar) continue;
-                
                 NSBundle *bundle = object_getIvar(catalog, bundleIvar);
                 if (!bundle) continue;
-
                 UIImage *image = [UIImage imageNamed:imageName
                                             inBundle:bundle
                        compatibleWithTraitCollection:nil];
-                
                 if (image) {
                     [imageCache setObject:image forKey:iconName];
                     return image;
@@ -69,11 +62,9 @@ extern "C" UIImage *iconWithName(NSString *iconName) {
 
 extern "C" NSString *localizedString(NSString *key, NSString *table) {
     if (!key) return nil;
-    
     NSString *cacheKey = [NSString stringWithFormat:@"%@-%@", key, table ?: @"nil"];
     NSString *cachedString = [stringCache objectForKey:cacheKey];
     if (cachedString) return cachedString;
-
     for (NSBundle *bundle in assetBundles) {
         NSString *localizedString = [bundle localizedStringForKey:key value:nil table:table];
         if (![localizedString isEqualToString:key]) {
@@ -85,19 +76,19 @@ extern "C" NSString *localizedString(NSString *key, NSString *table) {
 }
 
 extern "C" Class CoreClass(NSString *name) {
-  Class cls = NSClassFromString(name);
-  NSArray *prefixes = @[
-    @"Reddit.",
-    @"RedditCore.",
-    @"RedditCoreModels.",
-    @"RedditCore_RedditCoreModels.",
-    @"RedditUI.",
-  ];
-  for (NSString *prefix in prefixes) {
-    if (cls) break;
-    cls = NSClassFromString([prefix stringByAppendingString:name]);
-  }
-  return cls;
+    Class cls = NSClassFromString(name);
+    NSArray *prefixes = @[
+        @"Reddit.",
+        @"RedditCore.",
+        @"RedditCoreModels.",
+        @"RedditCore_RedditCoreModels.",
+        @"RedditUI.",
+    ];
+    for (NSString *prefix in prefixes) {
+        if (cls) break;
+        cls = NSClassFromString([prefix stringByAppendingString:name]);
+    }
+    return cls;
 }
 
 static BOOL shouldFilterObject(id object) {
@@ -112,13 +103,13 @@ static BOOL shouldFilterObject(id object) {
 
     // Do introspection
     NSString *className = NSStringFromClass(object_getClass(object));
-    
+
     // 1. Check Promoted (Ads)
     if (filterPromoted) {
         BOOL isAdPost = [className hasSuffix:@"AdPost"] ||
-                        ([object respondsToSelector:@selector(isAdPost)] && ((Post *)object).isAdPost) ||
-                        ([object respondsToSelector:@selector(isPromotedUserPostAd)] && [(Post *)object isPromotedUserPostAd]) ||
-                        ([object respondsToSelector:@selector(isPromotedCommunityPostAd)] && [(Post *)object isPromotedCommunityPostAd]);
+            ([object respondsToSelector:@selector(isAdPost)] && ((Post *)object).isAdPost) ||
+            ([object respondsToSelector:@selector(isPromotedUserPostAd)] && [(Post *)object isPromotedUserPostAd]) ||
+            ([object respondsToSelector:@selector(isPromotedCommunityPostAd)] && [(Post *)object isPromotedCommunityPostAd]);
         if (isAdPost) return YES;
     }
 
@@ -138,15 +129,14 @@ static BOOL shouldFilterObject(id object) {
 }
 
 static NSArray *filteredObjects(NSArray *objects) {
-  return [objects filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(
-                                                               id object, NSDictionary *bindings) {
+    return [objects filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(
+        id object, NSDictionary *bindings) {
         return !shouldFilterObject(object);
     }]];
 }
 
 static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
     if (![node isKindOfClass:NSMutableDictionary.class]) return;
-
     // Fetch typeName once and ensure it is a valid string to prevent unrecognized selector crashes
     NSString *typeName = node[@"__typename"];
     if (![typeName isKindOfClass:NSString.class]) return;
@@ -158,24 +148,19 @@ static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
         }
         if (prefs.scores) node[@"isScoreHidden"] = @YES;
         if (prefs.nsfw && [node[@"isNsfw"] boolValue]) node[@"isHidden"] = @YES;
-    } 
+    }
     else if ([typeName isEqualToString:@"Comment"]) {
         if (prefs.awards) {
             node[@"awardings"] = @[];
             node[@"isGildable"] = @NO;
         }
         if (prefs.scores) node[@"isScoreHidden"] = @YES;
-        
         if (prefs.automod) {
-		  NSDictionary *authorInfo = node[@"authorInfo"];
-		  if ([authorInfo isKindOfClass:NSDictionary.class]) {
-			id authorId = authorInfo[@"id"];
-			if ([authorId isKindOfClass:NSString.class] &&
-				[authorId isEqualToString:@"t2_6l4z3"]) {
-			  node[@"isInitiallyCollapsed"] = @YES;
-			}
-		  }
-		}
+            NSDictionary *authorInfo = node[@"authorInfo"];
+            if ([authorInfo isKindOfClass:NSDictionary.class] && [authorInfo[@"id"] isEqualToString:@"t2_6l4z3"]) {
+                node[@"isInitiallyCollapsed"] = @YES;
+            }
+        }
     }
     else if ([typeName isEqualToString:@"CellGroup"]) {
         // 1. Check Promoted (AdPayloads)
@@ -183,18 +168,15 @@ static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
             node[@"cells"] = @[];
             return; // Exit early if we cleared the cells
         }
-
         // 2. Check Recommended
         if (prefs.recommended && [node[@"recommendationContext"] isKindOfClass:NSDictionary.class]) {
             NSDictionary *recContext = node[@"recommendationContext"];
             id recTypeName = recContext[@"typeName"];
             id typeIdentifier = recContext[@"typeIdentifier"];
             id isContextHidden = recContext[@"isContextHidden"];
-            
-            if ([recTypeName isKindOfClass:NSString.class] && 
-                [typeIdentifier isKindOfClass:NSString.class] && 
+            if ([recTypeName isKindOfClass:NSString.class] &&
+                [typeIdentifier isKindOfClass:NSString.class] &&
                 [isContextHidden isKindOfClass:NSNumber.class]) {
-                
                 if (!(([recTypeName isEqualToString:@"PopularRecommendationContext"] ||
                        [typeIdentifier hasPrefix:@"global_popular"]) &&
                       [isContextHidden boolValue])) {
@@ -203,14 +185,12 @@ static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
                 }
             }
         }
-
         // 3. Process remaining ActionCells ONLY if Awards or Scores filters are enabled
         if (prefs.awards || prefs.scores) {
             NSMutableArray *cells = node[@"cells"];
             if ([cells isKindOfClass:NSMutableArray.class]) {
                 for (NSMutableDictionary *cell in cells) {
                     if (![cell isKindOfClass:NSMutableDictionary.class]) continue;
-                    
                     if ([cell[@"__typename"] isEqualToString:@"ActionCell"]) {
                         if (prefs.awards) {
                             cell[@"isAwardHidden"] = @YES;
@@ -230,87 +210,58 @@ static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
     }
 }
 
-// Generic, schema-agnostic filtering. Used for unknown operations and, now,
-// as the fallback whenever a known operation's hardcoded fast path fails to
-// resolve (e.g. after Reddit renames part of its GraphQL schema). Because it
-// walks the response structurally instead of by a fixed key path, it keeps
-// working across the common "an ancestor key got renamed" breakage.
-static void filterGenericResponse(NSMutableDictionary *json, RedditFilterPrefs prefs) {
-  if (![json[@"data"] isKindOfClass:NSDictionary.class]) return;
-
-  NSDictionary *dataDict = json[@"data"];
-  id root = dataDict.allValues.firstObject;
-
-  if ([root isKindOfClass:NSDictionary.class]) {
-    NSMutableDictionary *rootDict = (NSMutableDictionary *)root;
-
-    // Read the first child once instead of re-evaluating allValues repeatedly
-    id firstChild = rootDict.allValues.firstObject;
-    if ([firstChild isKindOfClass:NSDictionary.class]) {
-      id edges = ((NSDictionary *)firstChild)[@"edges"];
-      if ([edges isKindOfClass:NSArray.class]) {
-        for (NSMutableDictionary *edge in (NSArray *)edges)
-          if ([edge isKindOfClass:NSDictionary.class])
-            filterNode(edge[@"node"], prefs);
-      }
-    }
-
-    id commentForest = rootDict[@"commentForest"];
-    if ([commentForest isKindOfClass:NSDictionary.class]) {
-      id trees = ((NSDictionary *)commentForest)[@"trees"];
-      if ([trees isKindOfClass:NSArray.class]) {
-        for (NSMutableDictionary *tree in (NSArray *)trees)
-          if ([tree isKindOfClass:NSDictionary.class])
-            filterNode(tree[@"node"], prefs);
-      }
-    }
-
-    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    BOOL filterPromoted = [defaults boolForKey:kRedditFilterPromoted];
-
-    if (filterPromoted && rootDict[@"commentsPageAds"])
-      rootDict[@"commentsPageAds"] = @[];
-    if (filterPromoted && rootDict[@"commentTreeAds"])
-      rootDict[@"commentTreeAds"] = @[];
-    if (filterPromoted && rootDict[@"pdpCommentsAds"]) // Kept just in case the fast path misses
-      rootDict[@"pdpCommentsAds"] = @[];
-    if (rootDict[@"recommendations"] && [defaults boolForKey:kRedditFilterRecommended])
-      rootDict[@"recommendations"] = @[];
-  } else if ([root isKindOfClass:NSArray.class]) {
-    for (NSMutableDictionary *node in (NSArray *)root)
-      filterNode(node, prefs);
-  }
-}
-
 %hook NSURLSession
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request
-                            completionHandler:(void (^)(NSData *data, NSURLResponse *response,
-                                                        NSError *error))completionHandler {
-  if (![request.URL.host hasPrefix:@"gql"] && 
-      ![request.URL.host hasPrefix:@"oauth"])
-    return %orig;
+    completionHandler:(void (^)(NSData *data, NSURLResponse *response,
+                                NSError *error))completionHandler {
+    if (![request.URL.host hasPrefix:@"gql"] &&
+        ![request.URL.host hasPrefix:@"oauth"])
+        return %orig;
 
-  // Prevent crashes if the underlying method passed a nil completion handler
-  if (!completionHandler) {
-      return %orig;
-  }
+    // Prevent crashes if the underlying method passed a nil completion handler
+    if (!completionHandler) {
+        return %orig;
+    }
 
-  void (^newCompletionHandler)(NSData *, NSURLResponse *, NSError *) =
-      ^(NSData *data, NSURLResponse *response, NSError *error) {
+    void (^newCompletionHandler)(NSData *, NSURLResponse *, NSError *) =
+        ^(NSData *data, NSURLResponse *response, NSError *error) {
         // Safe bail-out to avoid executing NSJSONSerialization on empty/broken payloads
         if (error || !data || data.length == 0) return completionHandler(data, response, error);
 
+        // Identify the GraphQL operation FIRST. This only reads the (small) request body
+        // or URL query, so we can discard ignored operations WITHOUT ever deserializing
+        // the (potentially large) response body below.
+        NSString *operationName = @"Unknown";
+        if (request.HTTPBody) {
+            NSDictionary *bodyJson = [NSJSONSerialization JSONObjectWithData:request.HTTPBody options:0 error:nil];
+            if (bodyJson[@"id"]) operationName = bodyJson[@"id"];
+            else if (bodyJson[@"operationName"]) operationName = bodyJson[@"operationName"];
+        } else if ([request.URL.query containsString:@"operationName="]) {
+            for (NSString *param in [request.URL.query componentsSeparatedByString:@"&"]) {
+                if ([param hasPrefix:@"operationName="]) {
+                    operationName = [param substringFromIndex:14];
+                    break;
+                }
+            }
+        }
+
+        // Ignore Telemetry & Configs (Performance Saver). Bailing here avoids the full
+        // response parse for every operation in the ignore set.
+        if ([ignoredOperationsSet containsObject:operationName]) {
+            return completionHandler(data, response, error);
+        }
+
+        // Only now that we know we care about this operation do we parse the response body.
         NSError *jsonError = nil;
         id jsonObject = [NSJSONSerialization JSONObjectWithData:data
                                                         options:NSJSONReadingMutableContainers
                                                           error:&jsonError];
-                                                          
-        if (jsonError || !jsonObject || ![jsonObject isKindOfClass:NSDictionary.class]) {
+        if (jsonError || ![jsonObject isKindOfClass:NSDictionary.class]) {
             return completionHandler(data, response, error);
         }
-
         NSMutableDictionary *json = (NSMutableDictionary *)jsonObject;
-        // Load preferences once per network request
+
+        // Load preferences once per (handled) network request
         NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
         RedditFilterPrefs prefs = {
             [defaults boolForKey:kRedditFilterPromoted],
@@ -321,190 +272,147 @@ static void filterGenericResponse(NSMutableDictionary *json, RedditFilterPrefs p
             [defaults boolForKey:kRedditFilterAutoCollapseAutoMod]
         };
 
-        // Identify the GraphQL Operation
-        NSString *operationName = @"Unknown";
-        if (request.HTTPBody) {
-            NSDictionary *bodyJson = [NSJSONSerialization JSONObjectWithData:request.HTTPBody options:0 error:nil];
-            if (bodyJson[@"id"]) operationName = bodyJson[@"id"];
-            else if (bodyJson[@"operationName"]) operationName = bodyJson[@"operationName"];
-        } else if ([request.URL.query containsString:@"operationName="]) {
-            NSArray *components = [request.URL.query componentsSeparatedByString:@"&"];
-            for (NSString *param in components) {
-                if ([param hasPrefix:@"operationName="]) {
-                    operationName = [param substringFromIndex:14];
-                    break;
-                }
-            }
-        }
-
-        // Ignore Telemetry & Configs (Performance Saver)
-        if ([ignoredOperationsSet containsObject:operationName]) {
-            return completionHandler(data, response, error);
-        }
-
-        // Fast path based on known schemas. Each branch tries its hardcoded
-        // schema path; on a miss it records the failure (debug builds also try
-        // to auto-discover where the data moved) and falls back to the generic
-        // structural filter so content keeps being filtered.
+        // Fast Path based on known schemas. Each branch fetches the target array once into
+        // a local (with a type guard) instead of walking the key path twice.
         if ([operationName isEqualToString:@"HomeFeedSdui"]) {
-            id edges = [json valueForKeyPath:@"data.homeV3.elements.edges"];
-            BOOL resolved = [edges isKindOfClass:NSArray.class];
-            RF_RECORD_SCHEMA(@"HomeFeedSdui", @"data.homeV3.elements.edges", resolved, json, RFSchemaSigEdges);
-            if (resolved) {
-                for (NSMutableDictionary *edge in (NSArray *)edges)
-                    filterNode(edge[@"node"], prefs);
-            } else {
-                filterGenericResponse(json, prefs);
-            }
+            NSArray *edges = json[@"data"][@"homeV3"][@"elements"][@"edges"];
+            if ([edges isKindOfClass:NSArray.class])
+                for (NSMutableDictionary *edge in edges) filterNode(edge[@"node"], prefs);
         } else if ([operationName isEqualToString:@"PopularFeedSdui"]) {
-            id edges = [json valueForKeyPath:@"data.popularV3.elements.edges"];
-            BOOL resolved = [edges isKindOfClass:NSArray.class];
-            RF_RECORD_SCHEMA(@"PopularFeedSdui", @"data.popularV3.elements.edges", resolved, json, RFSchemaSigEdges);
-            if (resolved) {
-                for (NSMutableDictionary *edge in (NSArray *)edges)
-                    filterNode(edge[@"node"], prefs);
-            } else {
-                filterGenericResponse(json, prefs);
-            }
+            NSArray *edges = json[@"data"][@"popularV3"][@"elements"][@"edges"];
+            if ([edges isKindOfClass:NSArray.class])
+                for (NSMutableDictionary *edge in edges) filterNode(edge[@"node"], prefs);
         } else if ([operationName isEqualToString:@"FeedPostDetailsByIds"]) {
-            id nodes = [json valueForKeyPath:@"data.postsInfoByIds"];
-            BOOL resolved = [nodes isKindOfClass:NSArray.class];
-            RF_RECORD_SCHEMA(@"FeedPostDetailsByIds", @"data.postsInfoByIds", resolved, json, RFSchemaSigNodeArray);
-            if (resolved) {
-                for (NSMutableDictionary *node in (NSArray *)nodes)
-                    filterNode(node, prefs);
-            } else {
-                filterGenericResponse(json, prefs);
-            }
+            NSArray *posts = json[@"data"][@"postsInfoByIds"];
+            if ([posts isKindOfClass:NSArray.class])
+                for (NSMutableDictionary *node in posts) filterNode(node, prefs);
         } else if ([operationName isEqualToString:@"PostInfoByIdComments"] || [operationName isEqualToString:@"PostInfoById"]) {
-            NSMutableDictionary *postInfo = [json valueForKeyPath:@"data.postInfoById"];
-            id trees = [postInfo valueForKeyPath:@"commentForest.trees"];
-            // It's a "hit" if we found the trees array, OR if the post loaded perfectly but simply has 0 comments (commentForest is entirely omitted).
-            BOOL resolved = [trees isKindOfClass:NSArray.class] || 
-                            ([postInfo isKindOfClass:NSDictionary.class] && postInfo[@"commentForest"] == nil);             
-            RF_RECORD_SCHEMA(@"PostInfoById", @"data.postInfoById.commentForest.trees", resolved, json, RFSchemaSigTrees);
-            if (resolved) {
-                if ([trees isKindOfClass:NSArray.class]) {
-                    for (NSMutableDictionary *tree in (NSArray *)trees)
-                        filterNode(tree[@"node"], prefs);
-                }
-            } else {
-                filterGenericResponse(json, prefs);
-            }
+            NSMutableDictionary *postInfo = json[@"data"][@"postInfoById"];
             if ([postInfo isKindOfClass:NSDictionary.class]) {
+                NSArray *trees = postInfo[@"commentForest"][@"trees"];
+                if ([trees isKindOfClass:NSArray.class])
+                    for (NSMutableDictionary *tree in trees) filterNode(tree[@"node"], prefs);
                 filterNode(postInfo, prefs);
             }
         } else if ([operationName isEqualToString:@"PdpCommentsAds"]) {
-            // Locate the comment-ads container, then clear it if Promoted filtering is on.
-            NSMutableDictionary *adContainer = nil;
-            if ([json[@"data"] isKindOfClass:NSDictionary.class]) {
-                NSMutableDictionary *dataDict = json[@"data"];
-                id container = dataDict.allValues.firstObject;
-                if ([container isKindOfClass:NSMutableDictionary.class] &&
-                    ((NSMutableDictionary *)container)[@"pdpCommentsAds"]) {
-                    adContainer = (NSMutableDictionary *)container;
-                }
-            }
-            BOOL resolved = (adContainer != nil);
-            RF_RECORD_SCHEMA(@"PdpCommentsAds", @"data.*.pdpCommentsAds", resolved, json, RFSchemaSigCommentsAds);
-            if ([NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterPromoted]) {
-                if (resolved) {
-                    adContainer[@"pdpCommentsAds"] = @[];
-                } else {
-                    filterGenericResponse(json, prefs);
-                }
+            // Instantly clear out Comment Ads
+            if (prefs.promoted && [json[@"data"] isKindOfClass:NSDictionary.class]) {
+                NSDictionary *dataDict = json[@"data"];
+                NSMutableDictionary *inner = dataDict.allValues.firstObject;
+                if (inner[@"pdpCommentsAds"]) inner[@"pdpCommentsAds"] = @[];
             }
         } else {
-            // Unknown operation (e.g. ProfileFeedSdui): use the generic filter.
-            filterGenericResponse(json, prefs);
+            // Original recursive logic for unknown queries (like ProfileFeedSdui)
+            if ([json[@"data"] isKindOfClass:NSDictionary.class]) {
+                NSDictionary *dataDict = json[@"data"];
+                NSMutableDictionary *root = dataDict.allValues.firstObject;
+                if ([root isKindOfClass:NSDictionary.class]) {
+                    id firstChild = root.allValues.firstObject;
+                    if ([firstChild isKindOfClass:NSDictionary.class] && firstChild[@"edges"])
+                        for (NSMutableDictionary *edge in firstChild[@"edges"])
+                            filterNode(edge[@"node"], prefs);
+                    if (root[@"commentForest"])
+                        for (NSMutableDictionary *tree in root[@"commentForest"][@"trees"])
+                            filterNode(tree[@"node"], prefs);
+                    if (prefs.promoted) {
+                        if (root[@"commentsPageAds"]) root[@"commentsPageAds"] = @[];
+                        if (root[@"commentTreeAds"]) root[@"commentTreeAds"] = @[];
+                        if (root[@"pdpCommentsAds"]) root[@"pdpCommentsAds"] = @[]; // Kept just in case the fast path misses
+                    }
+                    if (prefs.recommended && root[@"recommendations"])
+                        root[@"recommendations"] = @[];
+                } else if ([root isKindOfClass:NSArray.class]) {
+                    for (NSMutableDictionary *node in (NSArray *)root) filterNode(node, prefs);
+                }
+            }
         }
 
         NSData *modifiedData = [NSJSONSerialization dataWithJSONObject:json options:0 error:nil];
         completionHandler(modifiedData ?: data, response, error);
-      };
-  return %orig(request, newCompletionHandler);
+    };
+
+    return %orig(request, newCompletionHandler);
 }
 %end
 
 // Only necessary for older app versions
 %group Legacy
-
 %hook Listing
 - (void)fetchNextPage:(id (^)(NSArray *, id))completionHandler {
-  id (^newCompletionHandler)(NSArray *, id) = ^(NSArray *objects, id _) {
-    return completionHandler(filteredObjects(objects), _);
-  };
-  return %orig(newCompletionHandler);
+    id (^newCompletionHandler)(NSArray *, id) = ^(NSArray *objects, id _) {
+        return completionHandler(filteredObjects(objects), _);
+    };
+    return %orig(newCompletionHandler);
 }
 %end
 
 %hook FeedNetworkSource
 - (NSArray *)postsAndCommentsFromData:(id)data {
-  return filteredObjects(%orig);
+    return filteredObjects(%orig);
 }
 %end
 
 %hook PostDetailPresenter
 - (BOOL)shouldFetchCommentAdPost {
-  return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterPromoted] ? NO : %orig;
+    return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterPromoted] ? NO : %orig;
 }
 - (BOOL)shouldFetchAdditionalCommentAdPosts {
-  return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterPromoted] ? NO : %orig;
+    return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterPromoted] ? NO : %orig;
 }
 %end
 
 %hook Carousel
 - (BOOL)isHiddenByUserWithAccountSettings:(id)accountSettings {
-  return ([NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterRecommended] &&
-          ([self.analyticType containsString:@"recommended"] ||
-           [self.analyticType containsString:@"similar"] ||
-           [self.analyticType containsString:@"popular"])) || %orig;
+    return ([NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterRecommended] &&
+            ([self.analyticType containsString:@"recommended"] ||
+             [self.analyticType containsString:@"similar"] ||
+             [self.analyticType containsString:@"popular"])) || %orig;
 }
 %end
 
 %hook QuickActionViewModel
 - (void)fetchActions {
-  if ([NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterRecommended]) return;
-  %orig;
+    if ([NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterRecommended]) return;
+    %orig;
 }
 %end
 
 %hook Post
 - (NSArray *)awardingTotals {
-  return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? nil : %orig;
+    return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? nil : %orig;
 }
 - (NSUInteger)totalAwardsReceived {
-  return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? 0 : %orig;
+    return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? 0 : %orig;
 }
 - (BOOL)canAward {
-  return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? NO : %orig;
+    return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? NO : %orig;
 }
 - (BOOL)isScoreHidden {
-  return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterScores] ? YES : %orig;
+    return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterScores] ? YES : %orig;
 }
 %end
 
 %hook Comment
 - (NSArray *)awardingTotals {
-  return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? nil : %orig;
+    return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? nil : %orig;
 }
 - (NSUInteger)totalAwardsReceived {
-  return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? 0 : %orig;
+    return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? 0 : %orig;
 }
 - (BOOL)canAward {
-  return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? NO : %orig;
+    return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? NO : %orig;
 }
 - (BOOL)shouldHighlightForHighAward {
-  return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? NO : %orig;
+    return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAwards] ? NO : %orig;
 }
 - (BOOL)isScoreHidden {
-  return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterScores] ? YES : %orig;
+    return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterScores] ? YES : %orig;
 }
 - (BOOL)shouldAutoCollapse {
-  return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAutoCollapseAutoMod] &&
-                 [((Comment *)self).authorPk isEqualToString:@"t2_6l4z3"]
-             ? YES
-             : %orig;
+    return [NSUserDefaults.standardUserDefaults boolForKey:kRedditFilterAutoCollapseAutoMod] &&
+           [((Comment *)self).authorPk isEqualToString:@"t2_6l4z3"]
+        ? YES
+        : %orig;
 }
 %end
 
@@ -514,21 +422,17 @@ static char kConstraintsAddedKey;
 %hook ToggleImageTableViewCell
 - (void)updateConstraints {
     %orig;
-
     // Prevent adding duplicate constraints if updateConstraints is called multiple times.
     NSNumber *constraintsAdded = objc_getAssociatedObject(self, &kConstraintsAddedKey);
     if (constraintsAdded.boolValue) return;
 
     UIStackView *horizontalStackView = [self respondsToSelector:@selector(imageLabelView)]
-          ? [self imageLabelView].horizontalStackView
-          : object_getIvar(self, class_getInstanceVariable(object_getClass(self), "horizontalStackView"));
-          
+        ? [self imageLabelView].horizontalStackView
+        : object_getIvar(self, class_getInstanceVariable(object_getClass(self), "horizontalStackView"));
     UILabel *detailLabel = [self respondsToSelector:@selector(imageLabelView)]
-                             ? [self imageLabelView].detailLabel
-                             : [self detailLabel];
-
+        ? [self imageLabelView].detailLabel
+        : [self detailLabel];
     if (!horizontalStackView || !detailLabel) return;
-  
     if (detailLabel.text) {
         UIView *contentView = [self contentView];
         [contentView addConstraints:@[
@@ -554,89 +458,74 @@ static char kConstraintsAddedKey;
                                         multiplier:1
                                           constant:0]
         ]];
-        
         // Mark as added
         objc_setAssociatedObject(self, &kConstraintsAddedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 }
 %end
 
-%end
-
 %ctor {
-  // Initialize caches
-  imageCache = [[NSCache alloc] init];
-  stringCache = [[NSCache alloc] init];
+    // Initialize caches
+    imageCache = [[NSCache alloc] init];
+    stringCache = [[NSCache alloc] init];
 
-  // Initialize Ignored Operations Set
-  ignoredOperationsSet = [[NSSet alloc] initWithObjects:
-      @"GetAccount", @"FetchIdentityPreferences", @"DynamicConfigsByNames",
-      @"GetAllExperimentVariants", @"AdsOffRedditLocation", @"UserLocation",
-      @"CookiePreferences", @"FetchSubscribedSubreddits", @"AdsOffRedditPreferences",
-      @"Age", @"RecommendedPrompts", @"EnrollInGamification", @"BadgeCounts",
-      @"GetEligibleUXExperiences", @"GetUserAdEligibility", @"GoldBalances",
-      @"PaymentSubscriptions", @"FeaturedDevvitGame", @"ModQueueNewItemCount",
-      @"LastModeratedSubredditName", @"AwardProductOffers", @"BlockedRedditors",
-      @"GamesPreferences", @"GetRedditUsersByIds", @"SubredditsForNames",
-      @"SubredditsForIds", @"ExposeExperimentBatch", @"GetProfilePostFlairTemplates",
-      @"GetRedditorByNameApollo", @"GetActiveSubreddits", @"GetMyShowcaseCarousel",
-      @"UserPublicTrophies", @"PostDraftsCount", @"BrandToolsStatus",
-      @"NotificationInbox", @"TrendingSearchesQuery", nil];
+    // Initialize Ignored Operations Set
+    ignoredOperationsSet = [[NSSet alloc] initWithObjects:
+        @"GetAccount", @"FetchIdentityPreferences", @"DynamicConfigsByNames",
+        @"GetAllExperimentVariants", @"AdsOffRedditLocation", @"UserLocation",
+        @"CookiePreferences", @"FetchSubscribedSubreddits", @"AdsOffRedditPreferences",
+        @"Age", @"RecommendedPrompts", @"EnrollInGamification", @"BadgeCounts",
+        @"GetEligibleUXExperiences", @"GetUserAdEligibility", @"GoldBalances",
+        @"PaymentSubscriptions", @"FeaturedDevvitGame", @"ModQueueNewItemCount",
+        @"LastModeratedSubredditName", @"AwardProductOffers", @"BlockedRedditors",
+        @"GamesPreferences", @"GetRedditUsersByIds", @"SubredditsForNames",
+        @"SubredditsForIds", @"ExposeExperimentBatch", @"GetProfilePostFlairTemplates",
+        @"GetRedditorByNameApollo", @"GetActiveSubreddits", @"GetMyShowcaseCarousel",
+        @"UserPublicTrophies", @"PostDraftsCount", @"BrandToolsStatus",
+        @"NotificationInbox", @"TrendingSearchesQuery", nil];
 
-  assetBundles = [NSMutableArray array];
-  assetCatalogs = [NSMutableArray array];
-  [assetBundles addObject:NSBundle.mainBundle];
-  
-  for (NSString *file in [NSFileManager.defaultManager contentsOfDirectoryAtPath:NSBundle.mainBundle.bundlePath error:nil]) {
-    if (![file hasSuffix:@"bundle"]) continue;
-    NSBundle *bundle = [NSBundle bundleWithPath:[NSBundle.mainBundle pathForResource:[file stringByDeletingPathExtension] ofType:@"bundle"]];
-    if (bundle) [assetBundles addObject:bundle];
-  }
-  
-  for (NSString *file in [NSFileManager.defaultManager contentsOfDirectoryAtPath:[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks"] error:nil]) {
-    if (![file hasSuffix:@"framework"]) continue;
-
-    NSString *frameworkPath = [NSBundle.mainBundle pathForResource:[file stringByDeletingPathExtension] ofType:@"framework" inDirectory:@"Frameworks"];
-    NSBundle *bundle = [NSBundle bundleWithPath:frameworkPath];
-    if (bundle) [assetBundles addObject:bundle];
-
-    for (NSString *file in [NSFileManager.defaultManager contentsOfDirectoryAtPath:frameworkPath error:nil]) {
-      if (![file hasSuffix:@"bundle"]) continue;
-
-      NSBundle *bundle = [NSBundle bundleWithPath:[frameworkPath stringByAppendingPathComponent:file]];
-      if (bundle) [assetBundles addObject:bundle];
+    assetBundles = [NSMutableArray array];
+    assetCatalogs = [NSMutableArray array];
+    [assetBundles addObject:NSBundle.mainBundle];
+    for (NSString *file in [NSFileManager.defaultManager contentsOfDirectoryAtPath:NSBundle.mainBundle.bundlePath error:nil]) {
+        if (![file hasSuffix:@"bundle"]) continue;
+        NSBundle *bundle = [NSBundle bundleWithPath:[NSBundle.mainBundle pathForResource:[file stringByDeletingPathExtension] ofType:@"bundle"]];
+        if (bundle) [assetBundles addObject:bundle];
     }
-  }
-  
-  for (NSBundle *bundle in assetBundles) {
-    NSError *error;
-    CUICatalog *catalog = [[%c(CUICatalog) alloc] initWithName:@"Assets" fromBundle:bundle error:&error];
-    if (!error) [assetCatalogs addObject:catalog];
-  }
-  
-  // Correct keys used for default values. Previously all checks were for kRedditFilterPromoted.
-  NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-  
-  if (![defaults objectForKey:kRedditFilterPromoted])
-    [defaults setBool:true forKey:kRedditFilterPromoted];
-    
-  if (![defaults objectForKey:kRedditFilterRecommended])
-    [defaults setBool:false forKey:kRedditFilterRecommended];
-    
-  if (![defaults objectForKey:kRedditFilterNSFW])
-    [defaults setBool:false forKey:kRedditFilterNSFW];
-    
-  if (![defaults objectForKey:kRedditFilterAwards])
-    [defaults setBool:false forKey:kRedditFilterAwards];
-    
-  if (![defaults objectForKey:kRedditFilterScores])
-    [defaults setBool:false forKey:kRedditFilterScores];
-    
-  if (![defaults objectForKey:kRedditFilterAutoCollapseAutoMod])
-    [defaults setBool:false forKey:kRedditFilterAutoCollapseAutoMod];
-    
-  %init;
-  %init(Legacy, Comment = CoreClass(@"Comment"), Post = CoreClass(@"Post"),
-                   QuickActionViewModel = CoreClass(@"QuickActionViewModel"),
-                   ToggleImageTableViewCell = CoreClass(@"ToggleImageTableViewCell"));
+    for (NSString *file in [NSFileManager.defaultManager contentsOfDirectoryAtPath:[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks"] error:nil]) {
+        if (![file hasSuffix:@"framework"]) continue;
+        NSString *frameworkPath = [NSBundle.mainBundle pathForResource:[file stringByDeletingPathExtension] ofType:@"framework" inDirectory:@"Frameworks"];
+        NSBundle *bundle = [NSBundle bundleWithPath:frameworkPath];
+        if (bundle) [assetBundles addObject:bundle];
+        for (NSString *file in [NSFileManager.defaultManager contentsOfDirectoryAtPath:frameworkPath error:nil]) {
+            if (![file hasSuffix:@"bundle"]) continue;
+            NSBundle *bundle = [NSBundle bundleWithPath:[frameworkPath stringByAppendingPathComponent:file]];
+            if (bundle) [assetBundles addObject:bundle];
+        }
+    }
+    for (NSBundle *bundle in assetBundles) {
+        NSError *error;
+        CUICatalog *catalog = [[%c(CUICatalog) alloc] initWithName:@"Assets" fromBundle:bundle error:&error];
+        if (!error) [assetCatalogs addObject:catalog];
+    }
+
+    // Correct keys used for default values. Previously all checks were for kRedditFilterPromoted.
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if (![defaults objectForKey:kRedditFilterPromoted])
+        [defaults setBool:true forKey:kRedditFilterPromoted];
+    if (![defaults objectForKey:kRedditFilterRecommended])
+        [defaults setBool:false forKey:kRedditFilterRecommended];
+    if (![defaults objectForKey:kRedditFilterNSFW])
+        [defaults setBool:false forKey:kRedditFilterNSFW];
+    if (![defaults objectForKey:kRedditFilterAwards])
+        [defaults setBool:false forKey:kRedditFilterAwards];
+    if (![defaults objectForKey:kRedditFilterScores])
+        [defaults setBool:false forKey:kRedditFilterScores];
+    if (![defaults objectForKey:kRedditFilterAutoCollapseAutoMod])
+        [defaults setBool:false forKey:kRedditFilterAutoCollapseAutoMod];
+
+    %init;
+    %init(Legacy, Comment = CoreClass(@"Comment"), Post = CoreClass(@"Post"),
+        QuickActionViewModel = CoreClass(@"QuickActionViewModel"),
+        ToggleImageTableViewCell = CoreClass(@"ToggleImageTableViewCell"));
 }
