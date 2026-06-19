@@ -140,8 +140,6 @@ static NSArray *filteredObjects(NSArray *objects) {
 }
 
 static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
-    // [Unchanged implementation of filterNode...]
-    // Uses the passed in 'prefs' struct which guarantees speed without reloading settings
     if (![node isKindOfClass:NSMutableDictionary.class]) return;
     NSString *typeName = node[@"__typename"];
     if (![typeName isKindOfClass:NSString.class]) return;
@@ -440,7 +438,56 @@ static NSString *ExtractOperationNameSafely(NSURLRequest *request) {
 }
 %end
 
-// [ToggleImageTableViewCell constraints hook unchanged...]
+// Create a static key for associated objects
+static char kConstraintsAddedKey;
+
+%hook ToggleImageTableViewCell
+- (void)updateConstraints {
+    %orig;
+    // Prevent adding duplicate constraints if updateConstraints is called multiple times.
+    NSNumber *constraintsAdded = objc_getAssociatedObject(self, &kConstraintsAddedKey);
+    if (constraintsAdded.boolValue) return;
+
+    UIStackView *horizontalStackView = [self respondsToSelector:@selector(imageLabelView)]
+          ? [self imageLabelView].horizontalStackView
+          : object_getIvar(self, class_getInstanceVariable(object_getClass(self), "horizontalStackView"));
+
+    UILabel *detailLabel = [self respondsToSelector:@selector(imageLabelView)]
+                             ? [self imageLabelView].detailLabel
+                             : [self detailLabel];
+
+    if (!horizontalStackView || !detailLabel) return;
+  
+    if (detailLabel.text) {
+        UIView *contentView = [self contentView];
+        [contentView addConstraints:@[
+            [NSLayoutConstraint constraintWithItem:detailLabel
+                                         attribute:NSLayoutAttributeHeight
+                                         relatedBy:NSLayoutRelationEqual
+                                            toItem:horizontalStackView
+                                         attribute:NSLayoutAttributeHeight
+                                        multiplier:.33
+                                          constant:0],
+            [NSLayoutConstraint constraintWithItem:horizontalStackView
+                                         attribute:NSLayoutAttributeHeight
+                                         relatedBy:NSLayoutRelationEqual
+                                            toItem:contentView
+                                         attribute:NSLayoutAttributeHeight
+                                        multiplier:1
+                                          constant:0],
+            [NSLayoutConstraint constraintWithItem:horizontalStackView
+                                         attribute:NSLayoutAttributeCenterY
+                                         relatedBy:NSLayoutRelationEqual
+                                            toItem:contentView
+                                         attribute:NSLayoutAttributeCenterY
+                                        multiplier:1
+                                          constant:0]
+        ]];
+        // Mark as added
+        objc_setAssociatedObject(self, &kConstraintsAddedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+%end
 
 %end
 
