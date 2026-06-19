@@ -47,6 +47,7 @@ extern NSString *const kRFDebugMisses;        // NSNumber  times the path was ni
 extern NSString *const kRFDebugDiscovered;    // NSString  auto-found path (or absent)
 extern NSString *const kRFDebugLastResolved;  // NSNumber  BOOL, last probe outcome
 extern NSString *const kRFDebugSeen;          // NSNumber  BOOL, any traffic observed
+extern NSString *const kRFDebugFailedJSON;    // NSString  captured JSON on failure
 
 @interface RFSchemaDebug : NSObject
 

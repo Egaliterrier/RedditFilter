@@ -14,6 +14,7 @@ NSString *const kRFDebugMisses = @"misses";
 NSString *const kRFDebugDiscovered = @"discovered";
 NSString *const kRFDebugLastResolved = @"lastResolved";
 NSString *const kRFDebugSeen = @"seen";
+NSString *const kRFDebugFailedJSON = @"failedJSON";
 
 // Bounds for discovery so a broken path can never turn into an expensive walk
 // on every response.
@@ -86,17 +87,17 @@ static const NSUInteger kRFMaxArrayProbe = 6; // array elements descended into
   __block BOOL needsDiscovery = NO;
   dispatch_sync(_queue, ^{
     NSMutableDictionary *record = _records[operation];
-    if (!record) {
-      [self seedOperation:operation expected:(expectedPath ?: operation)];
-      record = _records[operation];
-    }
-    record[kRFDebugSeen] = @YES;
-    record[kRFDebugLastResolved] = @(resolved);
-    if (resolved) {
-      record[kRFDebugHits] = @([record[kRFDebugHits] integerValue] + 1);
-    } else {
-      record[kRFDebugMisses] = @([record[kRFDebugMisses] integerValue] + 1);
-      if (!record[kRFDebugDiscovered]) needsDiscovery = YES;
+    // Re-check: another thread may have filled it in the meantime.
+    if (record && !record[kRFDebugDiscovered]) {
+      if (discovered.length) {
+        record[kRFDebugDiscovered] = discovered;
+      } else {
+        // If discovery failed, capture the raw JSON so you can inspect it
+        NSData *jsonData = [NSJSONSerialization dataWithJSONObject:json options:NSJSONWritingPrettyPrinted error:nil];
+        if (jsonData) {
+            record[kRFDebugFailedJSON] = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+        }
+      }
     }
   });
 
@@ -136,6 +137,7 @@ static const NSUInteger kRFMaxArrayProbe = 6; // array elements descended into
       record[kRFDebugLastResolved] = @NO;
       record[kRFDebugSeen] = @NO;
       [record removeObjectForKey:kRFDebugDiscovered];
+	  [record removeObjectForKey:kRFDebugFailedJSON];
     }
   });
 }

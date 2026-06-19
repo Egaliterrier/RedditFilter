@@ -13,6 +13,7 @@ extern Class CoreClass(NSString *name);
 @interface FeedFilterSettingsViewController (RFSchemaDebug)
 - (UITableViewCell *)debugCellForRow:(NSInteger)row inTableView:(UITableView *)tableView;
 - (void)rfCopyDiscoveredPath:(UIButton *)sender;
+- (void)rfCopyFailedJSON:(UIButton *)sender;
 - (void)rfResetCounters:(UIButton *)sender;
 @end
 #endif
@@ -347,6 +348,21 @@ extern Class CoreClass(NSString *name);
     } else {
       detail = [detail stringByAppendingFormat:@"\ncould not auto-locate a new path\nexpected: %@",
                                                expected];
+                                               
+      // Show the "Copy JSON" button if we captured a payload
+      NSString *failedJSON = record[kRFDebugFailedJSON];
+      if (failedJSON.length > 0) {
+          detail = [detail stringByAppendingString:@"\n\u2192 raw payload captured"];
+          UIButton *copyJsonButton = [UIButton buttonWithType:UIButtonTypeSystem];
+          [copyJsonButton setTitle:@"Copy JSON" forState:UIControlStateNormal];
+          copyJsonButton.titleLabel.font = [UIFont systemFontOfSize:14.0 weight:UIFontWeightSemibold];
+          copyJsonButton.tag = row;
+          [copyJsonButton addTarget:self
+                             action:@selector(rfCopyFailedJSON:)
+                   forControlEvents:UIControlEventTouchUpInside];
+          [copyJsonButton sizeToFit];
+          cell.accessoryView = copyJsonButton;
+      }
     }
     detailColor = [UIColor systemRedColor];
   }
@@ -371,6 +387,27 @@ extern Class CoreClass(NSString *name);
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
                  dispatch_get_main_queue(), ^{
                    [weakSender setTitle:@"Copy" forState:UIControlStateNormal];
+                   [weakSender sizeToFit];
+                 });
+#endif
+}
+%new
+- (void)rfCopyFailedJSON:(UIButton *)sender {
+#if REDDITFILTER_DEBUG
+  NSArray<NSDictionary *> *snapshot = [[RFSchemaDebug shared] snapshot];
+  if (sender.tag < 0 || sender.tag >= (NSInteger)snapshot.count) return;
+  
+  NSString *failedJSON = snapshot[sender.tag][kRFDebugFailedJSON];
+  if (!failedJSON.length) return;
+  
+  UIPasteboard.generalPasteboard.string = failedJSON;
+  [sender setTitle:@"Copied" forState:UIControlStateNormal];
+  [sender sizeToFit];
+  
+  __weak UIButton *weakSender = sender;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
+                 dispatch_get_main_queue(), ^{
+                   [weakSender setTitle:@"Copy JSON" forState:UIControlStateNormal];
                    [weakSender sizeToFit];
                  });
 #endif
