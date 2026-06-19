@@ -463,6 +463,7 @@ static char kConstraintsAddedKey;
     }
 }
 %end
+%end
 
 %ctor {
     // Initialize caches
