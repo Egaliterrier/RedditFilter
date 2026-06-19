@@ -1,7 +1,7 @@
 #import "FeedFilterSettingsViewController.h"
 #import "DebugMenu.h"
 
-extern "C" NSString *localizedString(NSString *key, NSString *table);
+extern NSString *localizedString(NSString *key, NSString *table);
 extern UIImage *iconWithName(NSString *iconName);
 extern Class CoreClass(NSString *name);
 #define LOC(x, d) (localizedString(x, nil) ?: d)
