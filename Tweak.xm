@@ -24,8 +24,22 @@ typedef struct {
     BOOL automod;
 } RedditFilterPrefs;
 
-// Global preferences cache, driven by Darwin notifications
+// Optimization 1: Global preferences struct managed via Darwin Notifications
 static RedditFilterPrefs globalPrefs;
+
+static void loadPreferences() {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    globalPrefs.promoted = [defaults objectForKey:kRedditFilterPromoted] ? [defaults boolForKey:kRedditFilterPromoted] : YES;
+    globalPrefs.recommended = [defaults boolForKey:kRedditFilterRecommended];
+    globalPrefs.nsfw = [defaults boolForKey:kRedditFilterNSFW];
+    globalPrefs.awards = [defaults boolForKey:kRedditFilterAwards];
+    globalPrefs.scores = [defaults boolForKey:kRedditFilterScores];
+    globalPrefs.automod = [defaults boolForKey:kRedditFilterAutoCollapseAutoMod];
+}
+
+static void prefsNotificationCallback(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    loadPreferences();
+}
 
 @interface CUICatalog : NSObject {
   NSBundle *_bundle;
@@ -40,11 +54,12 @@ static NSMutableArray<CUICatalog *> *assetCatalogs;
 
 extern "C" UIImage *iconWithName(NSString *iconName) {
     if (!iconName) return nil;
-
+    
+    // Check Cache First
     UIImage *cachedImage = [imageCache objectForKey:iconName];
     if (cachedImage) return cachedImage;
 
-    // 1. Safe Standard UI Fallback: Prioritize Public APIs first.
+    // Optimization 3: Try public UIKit API first to mitigate private API fragility
     for (NSBundle *bundle in assetBundles) {
         UIImage *image = [UIImage imageNamed:iconName inBundle:bundle compatibleWithTraitCollection:nil];
         if (image) {
@@ -53,18 +68,19 @@ extern "C" UIImage *iconWithName(NSString *iconName) {
         }
     }
 
-    // 2. Private Introspection Backup (Mitigating CoreUI brittleness)
+    // Fallback to internal CUICatalog properties if standard retrieval fails
     for (CUICatalog *catalog in assetCatalogs) {
         for (NSString *imageName in [catalog allImageNames]) {
             if ([imageName hasPrefix:iconName] &&
                 (imageName.length == iconName.length || imageName.length == iconName.length + 3)) {
                 
+                // SAFELY retrieve the private _bundle ivar
                 Ivar bundleIvar = class_getInstanceVariable(object_getClass(catalog), "_bundle");
                 if (!bundleIvar) continue;
                 
                 NSBundle *bundle = object_getIvar(catalog, bundleIvar);
                 if (!bundle) continue;
-
+                
                 UIImage *image = [UIImage imageNamed:imageName
                                             inBundle:bundle
                        compatibleWithTraitCollection:nil];
@@ -83,6 +99,7 @@ extern "C" NSString *localizedString(NSString *key, NSString *table) {
     NSString *cacheKey = [NSString stringWithFormat:@"%@-%@", key, table ?: @"nil"];
     NSString *cachedString = [stringCache objectForKey:cacheKey];
     if (cachedString) return cachedString;
+    
     for (NSBundle *bundle in assetBundles) {
         NSString *localizedString = [bundle localizedStringForKey:key value:nil table:table];
         if (![localizedString isEqualToString:key]) {
@@ -96,8 +113,11 @@ extern "C" NSString *localizedString(NSString *key, NSString *table) {
 extern "C" Class CoreClass(NSString *name) {
   Class cls = NSClassFromString(name);
   NSArray *prefixes = @[
-    @"Reddit.", @"RedditCore.", @"RedditCoreModels.",
-    @"RedditCore_RedditCoreModels.", @"RedditUI.",
+    @"Reddit.",
+    @"RedditCore.",
+    @"RedditCoreModels.",
+    @"RedditCore_RedditCoreModels.",
+    @"RedditUI.",
   ];
   for (NSString *prefix in prefixes) {
     if (cls) break;
@@ -107,12 +127,19 @@ extern "C" Class CoreClass(NSString *name) {
 }
 
 static BOOL shouldFilterObject(id object) {
-    // Utilize the fast cached globalPrefs instead of repeatedly reading NSUserDefaults
-    if (!globalPrefs.promoted && !globalPrefs.recommended && !globalPrefs.nsfw) return NO;
+    // Optimization 1: Use globally cached preferences
+    BOOL filterPromoted = globalPrefs.promoted;
+    BOOL filterRecommended = globalPrefs.recommended;
+    BOOL filterNSFW = globalPrefs.nsfw;
 
+    // If no relevant filters are on, return early
+    if (!filterPromoted && !filterRecommended && !filterNSFW) return NO;
+
+    // Do introspection
     NSString *className = NSStringFromClass(object_getClass(object));
 
-    if (globalPrefs.promoted) {
+    // 1. Check Promoted (Ads)
+    if (filterPromoted) {
         BOOL isAdPost = [className hasSuffix:@"AdPost"] ||
                         ([object respondsToSelector:@selector(isAdPost)] && ((Post *)object).isAdPost) ||
                         ([object respondsToSelector:@selector(isPromotedUserPostAd)] && [(Post *)object isPromotedUserPostAd]) ||
@@ -120,12 +147,14 @@ static BOOL shouldFilterObject(id object) {
         if (isAdPost) return YES;
     }
 
-    if (globalPrefs.recommended) {
+    // 2. Check Recommended
+    if (filterRecommended) {
         BOOL isRecommendation = [className containsString:@"Recommend"];
         if (isRecommendation) return YES;
     }
 
-    if (globalPrefs.nsfw) {
+    // 3. Check NSFW
+    if (filterNSFW) {
         BOOL isNSFW = [object respondsToSelector:@selector(isNSFW)] && ((Post *)object).isNSFW;
         if (isNSFW) return YES;
     }
@@ -134,13 +163,16 @@ static BOOL shouldFilterObject(id object) {
 }
 
 static NSArray *filteredObjects(NSArray *objects) {
-  return [objects filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id object, NSDictionary *bindings) {
+  return [objects filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(
+                                                               id object, NSDictionary *bindings) {
         return !shouldFilterObject(object);
   }]];
 }
 
 static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
     if (![node isKindOfClass:NSMutableDictionary.class]) return;
+    
+    // Fetch typeName once and ensure it is a valid string to prevent unrecognized selector crashes
     NSString *typeName = node[@"__typename"];
     if (![typeName isKindOfClass:NSString.class]) return;
 
@@ -162,31 +194,41 @@ static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
 		  NSDictionary *authorInfo = node[@"authorInfo"];
 		  if ([authorInfo isKindOfClass:NSDictionary.class]) {
 			id authorId = authorInfo[@"id"];
-            if ([authorId isKindOfClass:NSString.class] && [authorId isEqualToString:@"t2_6l4z3"]) {
+			if ([authorId isKindOfClass:NSString.class] &&
+				[authorId isEqualToString:@"t2_6l4z3"]) {
 			  node[@"isInitiallyCollapsed"] = @YES;
-            }
+			}
 		  }
 		}
     }
     else if ([typeName isEqualToString:@"CellGroup"]) {
+        // 1. Check Promoted (AdPayloads)
         if (prefs.promoted && [node[@"adPayload"] isKindOfClass:NSDictionary.class]) {
             node[@"cells"] = @[];
-            return;
+            return; // Exit early if we cleared the cells
         }
 
+        // 2. Check Recommended
         if (prefs.recommended && [node[@"recommendationContext"] isKindOfClass:NSDictionary.class]) {
             NSDictionary *recContext = node[@"recommendationContext"];
             id recTypeName = recContext[@"typeName"];
             id typeIdentifier = recContext[@"typeIdentifier"];
             id isContextHidden = recContext[@"isContextHidden"];
-            if ([recTypeName isKindOfClass:NSString.class] && [typeIdentifier isKindOfClass:NSString.class] && [isContextHidden isKindOfClass:NSNumber.class]) {
-                if (!(([recTypeName isEqualToString:@"PopularRecommendationContext"] || [typeIdentifier hasPrefix:@"global_popular"]) && [isContextHidden boolValue])) {
+            
+            if ([recTypeName isKindOfClass:NSString.class] && 
+                [typeIdentifier isKindOfClass:NSString.class] && 
+                [isContextHidden isKindOfClass:NSNumber.class]) {
+                
+                if (!(([recTypeName isEqualToString:@"PopularRecommendationContext"] ||
+                       [typeIdentifier hasPrefix:@"global_popular"]) &&
+                      [isContextHidden boolValue])) {
                     node[@"cells"] = @[];
-                    return; 
+                    return; // Exit early if we cleared the cells
                 }
             }
         }
 
+        // 3. Process remaining ActionCells ONLY if Awards or Scores filters are enabled
         if (prefs.awards || prefs.scores) {
             NSMutableArray *cells = node[@"cells"];
             if ([cells isKindOfClass:NSMutableArray.class]) {
@@ -211,6 +253,9 @@ static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
     }
 }
 
+// Generic, schema-agnostic filtering. Used for unknown operations and, now,
+// as the fallback whenever a known operation's hardcoded fast path fails to
+// resolve (e.g. after Reddit renames part of its GraphQL schema).
 static void filterGenericResponse(NSMutableDictionary *json, RedditFilterPrefs prefs) {
   if (![json[@"data"] isKindOfClass:NSDictionary.class]) return;
 
@@ -219,13 +264,16 @@ static void filterGenericResponse(NSMutableDictionary *json, RedditFilterPrefs p
   
   if ([root isKindOfClass:NSDictionary.class]) {
     NSMutableDictionary *rootDict = (NSMutableDictionary *)root;
+    
+    // Read the first child once instead of re-evaluating allValues repeatedly
     id firstChild = rootDict.allValues.firstObject;
     
     if ([firstChild isKindOfClass:NSDictionary.class]) {
       id edges = ((NSDictionary *)firstChild)[@"edges"];
       if ([edges isKindOfClass:NSArray.class]) {
         for (NSMutableDictionary *edge in (NSArray *)edges)
-          if ([edge isKindOfClass:NSDictionary.class]) filterNode(edge[@"node"], prefs);
+          if ([edge isKindOfClass:NSDictionary.class])
+            filterNode(edge[@"node"], prefs);
       }
     }
 
@@ -234,128 +282,151 @@ static void filterGenericResponse(NSMutableDictionary *json, RedditFilterPrefs p
       id trees = ((NSDictionary *)commentForest)[@"trees"];
       if ([trees isKindOfClass:NSArray.class]) {
         for (NSMutableDictionary *tree in (NSArray *)trees)
-          if ([tree isKindOfClass:NSDictionary.class]) filterNode(tree[@"node"], prefs);
+          if ([tree isKindOfClass:NSDictionary.class])
+            filterNode(tree[@"node"], prefs);
       }
     }
 
-    // Now uses the injected 'prefs' instead of reloading NSUserDefaults
-    if (prefs.promoted && rootDict[@"commentsPageAds"]) rootDict[@"commentsPageAds"] = @[];
-    if (prefs.promoted && rootDict[@"commentTreeAds"]) rootDict[@"commentTreeAds"] = @[];
-    if (prefs.promoted && rootDict[@"pdpCommentsAds"]) rootDict[@"pdpCommentsAds"] = @[];
-    if (rootDict[@"recommendations"] && prefs.recommended) rootDict[@"recommendations"] = @[];
+    // Optimization 1 & 4: Reuse passed preferences
+    if (prefs.promoted && rootDict[@"commentsPageAds"])
+      rootDict[@"commentsPageAds"] = @[];
     
+    if (prefs.promoted && rootDict[@"commentTreeAds"])
+      rootDict[@"commentTreeAds"] = @[];
+      
+    if (prefs.promoted && rootDict[@"pdpCommentsAds"]) // Kept just in case the fast path misses
+      rootDict[@"pdpCommentsAds"] = @[];
+      
+    if (rootDict[@"recommendations"] && prefs.recommended)
+      rootDict[@"recommendations"] = @[];
+      
   } else if ([root isKindOfClass:NSArray.class]) {
     for (NSMutableDictionary *node in (NSArray *)root)
       filterNode(node, prefs);
   }
 }
 
-// Optimization: Regex scanner safely interrogates the request body for an operationName before serialization
-static NSString *ExtractOperationNameSafely(NSURLRequest *request) {
-    NSString *operationName = @"Unknown";
-    
-    if (request.HTTPBody) {
-        NSString *bodyString = [[NSString alloc] initWithData:request.HTTPBody encoding:NSUTF8StringEncoding];
-        if (bodyString) {
-            static NSRegularExpression *regex = nil;
-            static dispatch_once_t onceToken;
-            dispatch_once(&onceToken, ^{
-                // Targets either "id" or "operationName" quickly without parsing JSON structural layers
-                regex = [NSRegularExpression regularExpressionWithPattern:@"\"(?:operationName|id)\"\\s*:\\s*\"([^\"]+)\"" options:0 error:nil];
-            });
-
-            NSTextCheckingResult *match = [regex firstMatchInString:bodyString options:0 range:NSMakeRange(0, bodyString.length)];
-            if (match && match.numberOfRanges > 1) {
-                operationName = [bodyString substringWithRange:[match rangeAtIndex:1]];
-            }
-        }
-    } else if ([request.URL.query containsString:@"operationName="]) {
-        NSArray *components = [request.URL.query componentsSeparatedByString:@"&"];
-        for (NSString *param in components) {
-            if ([param hasPrefix:@"operationName="]) {
-                operationName = [param substringFromIndex:14];
-                break;
-            }
-        }
-    }
-    return operationName;
-}
-
 %hook NSURLSession
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request
                             completionHandler:(void (^)(NSData *data, NSURLResponse *response,
                                                         NSError *error))completionHandler {
-  if (![request.URL.host hasPrefix:@"gql"] && ![request.URL.host hasPrefix:@"oauth"])
+  if (![request.URL.host hasPrefix:@"gql"] && 
+      ![request.URL.host hasPrefix:@"oauth"])
     return %orig;
 
+  // Prevent crashes if the underlying method passed a nil completion handler
   if (!completionHandler) {
-      return %orig;
-  }
-
-  // Interrogate the fast regex parser first. We avoid allocating and wrapping a block closure entirely if ignored.
-  NSString *operationName = ExtractOperationNameSafely(request);
-  if ([ignoredOperationsSet containsObject:operationName]) {
       return %orig;
   }
 
   void (^newCompletionHandler)(NSData *, NSURLResponse *, NSError *) =
       ^(NSData *data, NSURLResponse *response, NSError *error) {
+        // Safe bail-out to avoid executing NSJSONSerialization on empty/broken payloads
         if (error || !data || data.length == 0) return completionHandler(data, response, error);
+
+        // Identify the GraphQL Operation Safely (Optimization 2)
+        NSString *operationName = @"Unknown";
         
+        if (request.HTTPBody) {
+            NSString *bodyString = [[NSString alloc] initWithData:request.HTTPBody encoding:NSUTF8StringEncoding];
+            if (bodyString) {
+                // Avoid NSJSONSerialization, extract operationName directly using regex
+                NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"\"(?:operationName|id)\"\\s*:\\s*\"([^\"]+)\"" options:0 error:nil];
+                NSTextCheckingResult *match = [regex firstMatchInString:bodyString options:0 range:NSMakeRange(0, bodyString.length)];
+                if (match && match.numberOfRanges > 1) {
+                    operationName = [bodyString substringWithRange:[match rangeAtIndex:1]];
+                }
+            }
+        } else if ([request.URL.query containsString:@"operationName="]) {
+            NSArray *components = [request.URL.query componentsSeparatedByString:@"&"];
+            for (NSString *param in components) {
+                if ([param hasPrefix:@"operationName="]) {
+                    operationName = [param substringFromIndex:14];
+                    break;
+                }
+            }
+        }
+
+        // Ignore Telemetry & Configs (Performance Saver - Placed BEFORE response deserialization!)
+        if ([ignoredOperationsSet containsObject:operationName]) {
+            return completionHandler(data, response, error);
+        }
+
         NSError *jsonError = nil;
-        id jsonObject = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:&jsonError];
-        
+        id jsonObject = [NSJSONSerialization JSONObjectWithData:data
+                                                        options:NSJSONReadingMutableContainers
+                                                          error:&jsonError];
+                                                          
         if (jsonError || !jsonObject || ![jsonObject isKindOfClass:NSDictionary.class]) {
             return completionHandler(data, response, error);
         }
 
         NSMutableDictionary *json = (NSMutableDictionary *)jsonObject;
+        
+        // Optimization 1: Use globally cached preferences
         RedditFilterPrefs prefs = globalPrefs;
 
+        // Fast path based on known schemas.
         if ([operationName isEqualToString:@"HomeFeedSdui"]) {
             id edges = [json valueForKeyPath:@"data.homeV3.elements.edges"];
             BOOL resolved = [edges isKindOfClass:NSArray.class];
             RF_RECORD_SCHEMA(@"HomeFeedSdui", @"data.homeV3.elements.edges", resolved, json, RFSchemaSigEdges);
+            
             if (resolved) {
-                for (NSMutableDictionary *edge in (NSArray *)edges) filterNode(edge[@"node"], prefs);
-            } else filterGenericResponse(json, prefs);
-
+                for (NSMutableDictionary *edge in (NSArray *)edges)
+                    filterNode(edge[@"node"], prefs);
+            } else {
+                filterGenericResponse(json, prefs);
+            }
         } else if ([operationName isEqualToString:@"PopularFeedSdui"]) {
             id edges = [json valueForKeyPath:@"data.popularV3.elements.edges"];
             BOOL resolved = [edges isKindOfClass:NSArray.class];
             RF_RECORD_SCHEMA(@"PopularFeedSdui", @"data.popularV3.elements.edges", resolved, json, RFSchemaSigEdges);
+            
             if (resolved) {
-                for (NSMutableDictionary *edge in (NSArray *)edges) filterNode(edge[@"node"], prefs);
-            } else filterGenericResponse(json, prefs);
-
+                for (NSMutableDictionary *edge in (NSArray *)edges)
+                    filterNode(edge[@"node"], prefs);
+            } else {
+                filterGenericResponse(json, prefs);
+            }
         } else if ([operationName isEqualToString:@"FeedPostDetailsByIds"]) {
             id nodes = [json valueForKeyPath:@"data.postsInfoByIds"];
             BOOL resolved = [nodes isKindOfClass:NSArray.class];
             RF_RECORD_SCHEMA(@"FeedPostDetailsByIds", @"data.postsInfoByIds", resolved, json, RFSchemaSigNodeArray);
+            
             if (resolved) {
-                for (NSMutableDictionary *node in (NSArray *)nodes) filterNode(node, prefs);
-            } else filterGenericResponse(json, prefs);
-
+                for (NSMutableDictionary *node in (NSArray *)nodes)
+                    filterNode(node, prefs);
+            } else {
+                filterGenericResponse(json, prefs);
+            }
         } else if ([operationName isEqualToString:@"PostInfoByIdComments"] || [operationName isEqualToString:@"PostInfoById"]) {
             NSMutableDictionary *postInfo = [json valueForKeyPath:@"data.postInfoById"];
             id trees = [postInfo valueForKeyPath:@"commentForest.trees"];
-            BOOL resolved = [trees isKindOfClass:NSArray.class] || ([postInfo isKindOfClass:NSDictionary.class] && postInfo[@"commentForest"] == nil);             
+            // It's a "hit" if we found the trees array, OR if the post loaded perfectly but simply has 0 comments (commentForest is entirely omitted).
+            BOOL resolved = [trees isKindOfClass:NSArray.class] || 
+                            ([postInfo isKindOfClass:NSDictionary.class] && postInfo[@"commentForest"] == nil);             
             RF_RECORD_SCHEMA(@"PostInfoById", @"data.postInfoById.commentForest.trees", resolved, json, RFSchemaSigTrees);
             
             if (resolved) {
                 if ([trees isKindOfClass:NSArray.class]) {
-                    for (NSMutableDictionary *tree in (NSArray *)trees) filterNode(tree[@"node"], prefs);
+                    for (NSMutableDictionary *tree in (NSArray *)trees)
+                        filterNode(tree[@"node"], prefs);
                 }
-            } else filterGenericResponse(json, prefs);
-            
-            if ([postInfo isKindOfClass:NSDictionary.class]) filterNode(postInfo, prefs);
-
+            } else {
+                filterGenericResponse(json, prefs);
+            }
+            if ([postInfo isKindOfClass:NSDictionary.class]) {
+                filterNode(postInfo, prefs);
+            }
         } else if ([operationName isEqualToString:@"PdpCommentsAds"]) {
+            // Locate the comment-ads container, then clear it if Promoted filtering is on.
             NSMutableDictionary *adContainer = nil;
             if ([json[@"data"] isKindOfClass:NSDictionary.class]) {
                 NSMutableDictionary *dataDict = json[@"data"];
                 id container = dataDict.allValues.firstObject;
-                if ([container isKindOfClass:NSMutableDictionary.class] && ((NSMutableDictionary *)container)[@"pdpCommentsAds"]) {
+                if ([container isKindOfClass:NSMutableDictionary.class] &&
+                    ((NSMutableDictionary *)container)[@"pdpCommentsAds"]) {
                     adContainer = (NSMutableDictionary *)container;
                 }
             }
@@ -363,10 +434,14 @@ static NSString *ExtractOperationNameSafely(NSURLRequest *request) {
             RF_RECORD_SCHEMA(@"PdpCommentsAds", @"data.*.pdpCommentsAds", resolved, json, RFSchemaSigCommentsAds);
             
             if (prefs.promoted) {
-                if (resolved) adContainer[@"pdpCommentsAds"] = @[];
-                else filterGenericResponse(json, prefs);
+                if (resolved) {
+                    adContainer[@"pdpCommentsAds"] = @[];
+                } else {
+                    filterGenericResponse(json, prefs);
+                }
             }
         } else {
+            // Unknown operation (e.g. ProfileFeedSdui): use the generic filter.
             filterGenericResponse(json, prefs);
         }
 
@@ -377,8 +452,9 @@ static NSString *ExtractOperationNameSafely(NSURLRequest *request) {
 }
 %end
 
-// --- Legacy Operations relying on globalPrefs ---
+// Only necessary for older app versions
 %group Legacy
+
 %hook Listing
 - (void)fetchNextPage:(id (^)(NSArray *, id))completionHandler {
   id (^newCompletionHandler)(NSArray *, id) = ^(NSArray *objects, id _) {
@@ -421,20 +497,41 @@ static NSString *ExtractOperationNameSafely(NSURLRequest *request) {
 %end
 
 %hook Post
-- (NSArray *)awardingTotals { return globalPrefs.awards ? nil : %orig; }
-- (NSUInteger)totalAwardsReceived { return globalPrefs.awards ? 0 : %orig; }
-- (BOOL)canAward { return globalPrefs.awards ? NO : %orig; }
-- (BOOL)isScoreHidden { return globalPrefs.scores ? YES : %orig; }
+- (NSArray *)awardingTotals {
+  return globalPrefs.awards ? nil : %orig;
+}
+- (NSUInteger)totalAwardsReceived {
+  return globalPrefs.awards ? 0 : %orig;
+}
+- (BOOL)canAward {
+  return globalPrefs.awards ? NO : %orig;
+}
+- (BOOL)isScoreHidden {
+  return globalPrefs.scores ? YES : %orig;
+}
 %end
 
 %hook Comment
-- (NSArray *)awardingTotals { return globalPrefs.awards ? nil : %orig; }
-- (NSUInteger)totalAwardsReceived { return globalPrefs.awards ? 0 : %orig; }
-- (BOOL)canAward { return globalPrefs.awards ? NO : %orig; }
-- (BOOL)shouldHighlightForHighAward { return globalPrefs.awards ? NO : %orig; }
-- (BOOL)isScoreHidden { return globalPrefs.scores ? YES : %orig; }
+- (NSArray *)awardingTotals {
+  return globalPrefs.awards ? nil : %orig;
+}
+- (NSUInteger)totalAwardsReceived {
+  return globalPrefs.awards ? 0 : %orig;
+}
+- (BOOL)canAward {
+  return globalPrefs.awards ? NO : %orig;
+}
+- (BOOL)shouldHighlightForHighAward {
+  return globalPrefs.awards ? NO : %orig;
+}
+- (BOOL)isScoreHidden {
+  return globalPrefs.scores ? YES : %orig;
+}
 - (BOOL)shouldAutoCollapse {
-  return globalPrefs.automod && [((Comment *)self).authorPk isEqualToString:@"t2_6l4z3"] ? YES : %orig;
+  return globalPrefs.automod &&
+                 [((Comment *)self).authorPk isEqualToString:@"t2_6l4z3"]
+             ? YES
+             : %orig;
 }
 %end
 
@@ -447,15 +544,15 @@ static char kConstraintsAddedKey;
     // Prevent adding duplicate constraints if updateConstraints is called multiple times.
     NSNumber *constraintsAdded = objc_getAssociatedObject(self, &kConstraintsAddedKey);
     if (constraintsAdded.boolValue) return;
-
+    
     UIStackView *horizontalStackView = [self respondsToSelector:@selector(imageLabelView)]
           ? [self imageLabelView].horizontalStackView
           : object_getIvar(self, class_getInstanceVariable(object_getClass(self), "horizontalStackView"));
-
+          
     UILabel *detailLabel = [self respondsToSelector:@selector(imageLabelView)]
                              ? [self imageLabelView].detailLabel
                              : [self detailLabel];
-
+                             
     if (!horizontalStackView || !detailLabel) return;
   
     if (detailLabel.text) {
@@ -491,25 +588,12 @@ static char kConstraintsAddedKey;
 
 %end
 
-// --- Cache Load & Darwin Notification Observer ---
-static void ReloadPreferences() {
-    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    globalPrefs.promoted = [defaults boolForKey:kRedditFilterPromoted];
-    globalPrefs.recommended = [defaults boolForKey:kRedditFilterRecommended];
-    globalPrefs.nsfw = [defaults boolForKey:kRedditFilterNSFW];
-    globalPrefs.awards = [defaults boolForKey:kRedditFilterAwards];
-    globalPrefs.scores = [defaults boolForKey:kRedditFilterScores];
-    globalPrefs.automod = [defaults boolForKey:kRedditFilterAutoCollapseAutoMod];
-}
-
-static void PreferencesChangedCallback(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    ReloadPreferences();
-}
-
 %ctor {
+  // Initialize caches
   imageCache = [[NSCache alloc] init];
   stringCache = [[NSCache alloc] init];
   
+  // Initialize Ignored Operations Set
   ignoredOperationsSet = [[NSSet alloc] initWithObjects:
       @"GetAccount", @"FetchIdentityPreferences", @"DynamicConfigsByNames",
       @"GetAllExperimentVariants", @"AdsOffRedditLocation", @"UserLocation",
@@ -553,25 +637,28 @@ static void PreferencesChangedCallback(CFNotificationCenterRef center, void *obs
     if (!error) [assetCatalogs addObject:catalog];
   }
   
+  // Correct keys used for default values.
   NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-  if (![defaults objectForKey:kRedditFilterPromoted]) [defaults setBool:true forKey:kRedditFilterPromoted];
-  if (![defaults objectForKey:kRedditFilterRecommended]) [defaults setBool:false forKey:kRedditFilterRecommended];
-  if (![defaults objectForKey:kRedditFilterNSFW]) [defaults setBool:false forKey:kRedditFilterNSFW];
-  if (![defaults objectForKey:kRedditFilterAwards]) [defaults setBool:false forKey:kRedditFilterAwards];
-  if (![defaults objectForKey:kRedditFilterScores]) [defaults setBool:false forKey:kRedditFilterScores];
-  if (![defaults objectForKey:kRedditFilterAutoCollapseAutoMod]) [defaults setBool:false forKey:kRedditFilterAutoCollapseAutoMod];
+  
+  if (![defaults objectForKey:kRedditFilterPromoted])
+    [defaults setBool:true forKey:kRedditFilterPromoted];
+  if (![defaults objectForKey:kRedditFilterRecommended])
+    [defaults setBool:false forKey:kRedditFilterRecommended];
+  if (![defaults objectForKey:kRedditFilterNSFW])
+    [defaults setBool:false forKey:kRedditFilterNSFW];
+  if (![defaults objectForKey:kRedditFilterAwards])
+    [defaults setBool:false forKey:kRedditFilterAwards];
+  if (![defaults objectForKey:kRedditFilterScores])
+    [defaults setBool:false forKey:kRedditFilterScores];
+  if (![defaults objectForKey:kRedditFilterAutoCollapseAutoMod])
+    [defaults setBool:false forKey:kRedditFilterAutoCollapseAutoMod];
 
-  // Perform initial cache load and subscribe to the Darwin notification center
-  ReloadPreferences();
-  CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), 
-                                  NULL, 
-                                  PreferencesChangedCallback, 
-                                  CFSTR("com.redditfilter.prefs-updated"), 
-                                  NULL, 
-                                  CFNotificationSuspensionBehaviorDeliverImmediately);
-
+  // Set up cached struct & notification listener
+  loadPreferences();
+  CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, prefsNotificationCallback, CFSTR("com.level3tjg.redditfilter/prefsUpdated"), NULL, CFNotificationSuspensionBehaviorCoalesce);
+    
   %init;
   %init(Legacy, Comment = CoreClass(@"Comment"), Post = CoreClass(@"Post"),
-                QuickActionViewModel = CoreClass(@"QuickActionViewModel"),
-                ToggleImageTableViewCell = CoreClass(@"ToggleImageTableViewCell"));
+                   QuickActionViewModel = CoreClass(@"QuickActionViewModel"),
+                   ToggleImageTableViewCell = CoreClass(@"ToggleImageTableViewCell"));
 }
