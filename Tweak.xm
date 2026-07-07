@@ -467,7 +467,8 @@ static void filterGenericResponse(NSMutableDictionary *json, RedditFilterPrefs p
 
 %hook FeedNetworkSource
 - (NSArray *)postsAndCommentsFromData:(id)data {
-  return filteredObjects(%orig);
+  NSArray *origArray = %orig;
+  return filteredObjects(origArray);
 }
 %end
 
