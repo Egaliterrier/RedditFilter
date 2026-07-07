@@ -209,24 +209,25 @@ static void filterNode(NSMutableDictionary *node, RedditFilterPrefs prefs) {
         }
 
         // 2. Check Recommended
-        if (prefs.recommended && [node[@"recommendationContext"] isKindOfClass:NSDictionary.class]) {
-            NSDictionary *recContext = node[@"recommendationContext"];
-            id recTypeName = recContext[@"typeName"];
-            id typeIdentifier = recContext[@"typeIdentifier"];
-            id isContextHidden = recContext[@"isContextHidden"];
-            
-            if ([recTypeName isKindOfClass:NSString.class] && 
-                [typeIdentifier isKindOfClass:NSString.class] && 
-                [isContextHidden isKindOfClass:NSNumber.class]) {
-                
-                if (!(([recTypeName isEqualToString:@"PopularRecommendationContext"] ||
-                       [typeIdentifier hasPrefix:@"global_popular"]) &&
-                      [isContextHidden boolValue])) {
-                    node[@"cells"] = @[];
-                    return; // Exit early if we cleared the cells
-                }
-            }
-        }
+		if (prefs.recommended && [node[@"recommendationContext"] isKindOfClass:NSDictionary.class]) {
+			NSDictionary *recContext = node[@"recommendationContext"];
+			id recTypeName = recContext[@"typeName"];
+			id typeIdentifier = recContext[@"typeIdentifier"];
+
+			if ([recTypeName isKindOfClass:NSString.class] && 
+				[typeIdentifier isKindOfClass:NSString.class]) {
+				
+				// Check if the post is part of the standard Popular feed
+				BOOL isPopularFeed = [recTypeName isEqualToString:@"PopularRecommendationContext"] || 
+									 [typeIdentifier hasPrefix:@"global_popular"];
+				
+				// If it's NOT the popular feed, it is a home-feed recommendation. Wipe it.
+				if (!isPopularFeed) {
+					node[@"cells"] = @[];
+					return; 
+				}
+			}
+		}
 
         // 3. Process remaining ActionCells ONLY if Awards or Scores filters are enabled
         if (prefs.awards || prefs.scores) {
