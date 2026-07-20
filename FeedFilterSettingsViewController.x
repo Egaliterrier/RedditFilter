@@ -1,3 +1,4 @@
+#import <CoreFoundation/CoreFoundation.h>
 #import "FeedFilterSettingsViewController.h"
 #import "DebugMenu.h"
 
@@ -5,6 +6,11 @@ extern NSString *localizedString(NSString *key, NSString *table);
 extern UIImage *iconWithName(NSString *iconName);
 extern Class CoreClass(NSString *name);
 #define LOC(x, d) (localizedString(x, nil) ?: d)
+
+// Helper to broadcast preferences update
+static void postPrefsUpdatedNotification() {
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFSTR("com.level3tjg.redditfilter/prefsUpdated"), NULL, NULL, true);
+}
 
 #if REDDITFILTER_DEBUG
 // Visible declarations for the debug-only helpers so the direct call site in
@@ -51,6 +57,10 @@ extern Class CoreClass(NSString *name);
     case 0: {
       toggleCell = [tableView dequeueReusableCellWithIdentifier:kToggleCellID
                                                    forIndexPath:indexPath];
+      
+      // Fixed Switch Handler Accumulation
+      [toggleCell.accessorySwitch removeTarget:nil action:NULL forControlEvents:UIControlEventAllEvents];
+                                                   
       switch (indexPath.row) {
         case 0:
           mainLabelText = LOC(@"filter.settings.promoted.title", @"Promoted");
@@ -132,6 +142,7 @@ extern Class CoreClass(NSString *name);
   ([cell respondsToSelector:@selector(detailLabel)] ? cell.detailLabel
                                                     : cell.imageLabelView.detailLabel)
       .text = detailLabelText;
+      
   UIImage *iconImage;
   for (NSString *iconName in iconNames) {
     iconImage = iconWithName(iconName);
@@ -157,11 +168,14 @@ extern Class CoreClass(NSString *name);
                            layoutGuidance.maxContentWidth - layoutGuidance.gridPaddingDouble, 40.0);
   [label associatePropertySetter:@selector(setTextColor:)
          withThemePropertyGetter:@selector(metaTextColor)];
+         
   BaseTableReusableView *headerView = [[%c(BaseTableReusableView) alloc]
       initWithFrame:CGRectMake(0, 0, tableView.frameWidth, 40.0)];
   [headerView.contentView addSubview:label];
+  
   [headerView associatePropertySetter:@selector(setBackgroundColor:)
               withThemePropertyGetter:@selector(canvasColor)];
+              
   switch (section) {
     case 0:
       label.text = [LOC(@"filter.settings.header", @"Filters") uppercaseString];
@@ -190,11 +204,14 @@ extern Class CoreClass(NSString *name);
                            footerHeight);
   [label associatePropertySetter:@selector(setTextColor:)
          withThemePropertyGetter:@selector(metaTextColor)];
+         
   BaseTableReusableView *footerView = [[%c(BaseTableReusableView) alloc]
       initWithFrame:CGRectMake(0, 0, tableView.frameWidth, footerHeight)];
   [footerView.contentView addSubview:label];
+  
   [footerView associatePropertySetter:@selector(setBackgroundColor:)
               withThemePropertyGetter:@selector(canvasColor)];
+              
   switch (section) {
     case 0:
       label.text = LOC(@"filter.settings.footer", @"Filter specific types of posts from your feed");
@@ -230,35 +247,44 @@ extern Class CoreClass(NSString *name);
          forCellReuseIdentifier:kToggleCellID];
   [self.tableView registerClass:labelCellClass
          forCellReuseIdentifier:kLabelCellID];
+         
 #if REDDITFILTER_DEBUG
   // Debug rows carry multi-line detail text, so let them self-size.
   self.tableView.estimatedRowHeight = 60.0;
   self.tableView.rowHeight = UITableViewAutomaticDimension;
 #endif
 }
+
+// Emitting notifications across tweak processes allows updates without querying
 %new
 - (void)didTogglePromotedSwitch:(UISwitch *)sender {
   [NSUserDefaults.standardUserDefaults setBool:!sender.on forKey:kRedditFilterPromoted];
+  postPrefsUpdatedNotification();
 }
 %new
 - (void)didToggleRecommendedSwitch:(UISwitch *)sender {
   [NSUserDefaults.standardUserDefaults setBool:!sender.on forKey:kRedditFilterRecommended];
+  postPrefsUpdatedNotification();
 }
 %new
 - (void)didToggleNsfwSwitch:(UISwitch *)sender {
   [NSUserDefaults.standardUserDefaults setBool:!sender.on forKey:kRedditFilterNSFW];
+  postPrefsUpdatedNotification();
 }
 %new
 - (void)didToggleAwardsSwitch:(UISwitch *)sender {
   [NSUserDefaults.standardUserDefaults setBool:!sender.on forKey:kRedditFilterAwards];
+  postPrefsUpdatedNotification();
 }
 %new
 - (void)didToggleScoresSwitch:(UISwitch *)sender {
   [NSUserDefaults.standardUserDefaults setBool:!sender.on forKey:kRedditFilterScores];
+  postPrefsUpdatedNotification();
 }
 %new
 - (void)didToggleAutoCollapseAutoModSwitch:(UISwitch *)sender {
   [NSUserDefaults.standardUserDefaults setBool:sender.on forKey:kRedditFilterAutoCollapseAutoMod];
+  postPrefsUpdatedNotification();
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +300,7 @@ extern Class CoreClass(NSString *name);
 - (UITableViewCell *)debugCellForRow:(NSInteger)row inTableView:(UITableView *)tableView {
 #if REDDITFILTER_DEBUG
   static NSString *const kRFDebugCellID = @"RFSchemaDebugCell";
+  
   // Deliberately a plain UIKit cell, not a Reddit class: the whole point of
   // this screen is to keep working when Reddit's own classes/schema change.
   UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:kRFDebugCellID];
@@ -289,7 +316,7 @@ extern Class CoreClass(NSString *name);
   cell.selectionStyle = UITableViewCellSelectionStyleNone;
 
   NSArray<NSDictionary *> *snapshot = [[RFSchemaDebug shared] snapshot];
-
+  
   // Trailing "reset" row.
   if (row >= (NSInteger)snapshot.count) {
     cell.textLabel.textColor = [UIColor systemBlueColor];
