@@ -13,9 +13,17 @@ on:
         type: string
         required: false
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-22.04
+
+    # NOTE: workflow_dispatch inputs are often treated as strings.
+    # The expression below is robust to both boolean true and string "true".
+    env:
+      CREATE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && (inputs.create_release == true || inputs.create_release == 'true') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +46,7 @@ jobs:
           sudo apt install -y rsync
 
       - name: Install theos-jailed dependencies
-        if: ${{ inputs.create_release }}
+        if: ${{ env.CREATE_RELEASE == 'true' }}
         run: |
           sudo apt update
           sudo apt install -y build-essential checkinstall git autoconf automake libtool-bin llvm xmlstarlet
@@ -49,7 +57,7 @@ jobs:
           sudo ldconfig
 
       - name: Download IPA (Auto)
-        if: ${{ inputs.create_release && !inputs.ipa_url }}
+        if: ${{ env.CREATE_RELEASE == 'true' && !inputs.ipa_url }}
         uses: level3tjg/decryptedappstore-action@main
         with:
           appstore_url: "https://apps.apple.com/us/app/reddit/id1064216828"
@@ -58,13 +66,13 @@ jobs:
           token: ${{ secrets.DECRYPTEDAPPSTORE_SESSION_TOKEN }}
 
       - name: Download IPA (Manual)
-        if: ${{ inputs.create_release && inputs.ipa_url }}
+        if: ${{ env.CREATE_RELEASE == 'true' && inputs.ipa_url }}
         run: |
           curl -Lo "${{ github.workspace }}/App.ipa" "${{ inputs.ipa_url }}"
           zip -T "${{ github.workspace }}/App.ipa"
 
       - name: Get IPA Info
-        if: ${{ inputs.create_release }}
+        if: ${{ env.CREATE_RELEASE == 'true' }}
         id: ipa_info
         run: |
           info=$(unzip -p "${{ github.workspace }}/App.ipa" Payload/*.app/Info.plist)
@@ -90,7 +98,7 @@ jobs:
           fi
 
       - name: Checkout theos-jailed
-        if: ${{ inputs.create_release }}
+        if: ${{ env.CREATE_RELEASE == 'true' }}
         uses: actions/checkout@v4
         with:
           repository: level3tjg/theos-jailed
@@ -98,25 +106,25 @@ jobs:
           submodules: recursive
 
       - name: Install theos-jailed
-        if: ${{ inputs.create_release }}
+        if: ${{ env.CREATE_RELEASE == 'true' }}
         run: |
           ./theos-jailed/install
 
       - name: Build rootless deb
         run: make package
         env:
-          FINALPACKAGE: ${{ inputs.create_release }}
+          FINALPACKAGE: ${{ env.CREATE_RELEASE == 'true' }}
           THEOS_PACKAGE_SCHEME: rootless
           ADDITIONAL_CFLAGS: ${{ steps.debug_vars.outputs.cflags }}
 
       - name: Build rootful deb
         run: make clean package
         env:
-          FINALPACKAGE: ${{ inputs.create_release }}
+          FINALPACKAGE: ${{ env.CREATE_RELEASE == 'true' }}
           ADDITIONAL_CFLAGS: ${{ steps.debug_vars.outputs.cflags }}
 
       - name: Build IPA
-        if: ${{ inputs.create_release }}
+        if: ${{ env.CREATE_RELEASE == 'true' }}
         run: make package
         env:
           FINALPACKAGE: 1
@@ -126,7 +134,7 @@ jobs:
           ADDITIONAL_CFLAGS: ${{ steps.debug_vars.outputs.cflags }}
 
       - name: Append Debug Suffix to IPA
-        if: ${{ inputs.create_release && github.ref_name != 'main' }}
+        if: ${{ env.CREATE_RELEASE == 'true' && github.ref_name != 'main' }}
         run: |
           for file in packages/*.ipa; do
             if [ -f "$file" ]; then
@@ -143,10 +151,13 @@ jobs:
           echo 'EOF' >> $GITHUB_OUTPUT
 
       - name: Create release
-        if: ${{ inputs.create_release }}
-        uses: softprops/action-gh-release@v2
+        if: ${{ env.CREATE_RELEASE == 'true' }}
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           files: packages/*.ipa
+          fail_on_unmatched_files: true
+          # Create the tag/release against the commit that triggered this run
+          target_commitish: ${{ github.sha }}
           tag_name: v${{ steps.ipa_info.outputs.version }}-${{ steps.package_info.outputs.version }}
           body: ${{ steps.hash_files.outputs.hashes }}
